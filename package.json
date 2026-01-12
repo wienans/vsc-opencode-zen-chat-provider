@@ -1,0 +1,82 @@
+{
+  "name": "opencode-zen-chat-provider",
+  "publisher": "opencode",
+  "displayName": "OpenCode Zen",
+  "description": "Provides OpenCode Zen models to VS Code's Language Model API.",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.104.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:opencodeZen.setApiKey",
+    "onCommand:opencodeZen.clearApiKey",
+    "onCommand:opencodeZen.refreshModels",
+    "onCommand:opencodeZen.selfTest"
+  ],
+  "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "opencode",
+        "displayName": "OpenCode Zen"
+      }
+    ],
+    "commands": [
+      {
+        "command": "opencodeZen.setApiKey",
+        "title": "OpenCode Zen: Set API Key"
+      },
+      {
+        "command": "opencodeZen.clearApiKey",
+        "title": "OpenCode Zen: Clear API Key"
+      },
+      {
+        "command": "opencodeZen.refreshModels",
+        "title": "OpenCode Zen: Refresh Model List"
+      },
+      {
+        "command": "opencodeZen.selfTest",
+        "title": "OpenCode Zen: Self Test"
+      }
+    ],
+    "configuration": {
+      "title": "OpenCode Zen",
+      "properties": {
+        "opencodeZen.modelCacheTtlMinutes": {
+          "type": "number",
+          "default": 15,
+          "minimum": 0,
+          "description": "How long to cache models.dev model metadata before refetching. 0 disables caching."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "download-api": "dts dev",
+    "postdownload-api": "dts main",
+    "postinstall": "npm run download-api",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^0.2.0",
+    "ai": "^4.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "@stylistic/eslint-plugin": "^2.9.0",
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.108.1",
+    "@vscode/dts": "^0.4.1",
+    "eslint": "^9.13.0",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.39.0"
+  }
+}
