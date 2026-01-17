@@ -278,7 +278,10 @@ async function runToolLoop(
 			{
 				justification: 'OpenCode Zen self-test: verify streaming + tool calling.',
 				tools: [tool],
-				toolMode: vscode.LanguageModelChatToolMode.Required,
+				toolMode:
+					context.toolMode === 'required'
+						? vscode.LanguageModelChatToolMode.Required
+						: vscode.LanguageModelChatToolMode.Auto,
 				modelOptions: { __opencodeDebugSelfTest: true },
 			},
 			token
@@ -330,6 +333,11 @@ async function runToolLoop(
 			const content = [new vscode.LanguageModelTextPart(now)];
 			messages.push(vscode.LanguageModelChatMessage.User([new vscode.LanguageModelToolResultPart(call.callId, content)]));
 			output.info(`Tool result sent for ${call.callId}.`);
+		}
+
+		if (context.toolMode === 'required') {
+			context.toolMode = 'auto';
+			messages.push(vscode.LanguageModelChatMessage.User('Now respond without calling any tools.'));
 		}
 	}
 
