@@ -16,8 +16,6 @@ npm run watch
 # Run ESLint on all TypeScript files
 npm run lint
 
-# Download VS Code API types (runs postinstall)
-npm run download-api
 ```
 
 **Debugging in VS Code:**
@@ -92,7 +90,7 @@ npm run download-api
 
 ### API Communication
 
-- Use `createOpenAICompatible` from `@ai-sdk/openai-compatible`
+- Use vercel `ai-sdk` for API Requests to the models. (which sdk should be used is defined per model by models.dev)
 - Base URL: `https://opencode.ai/zen/v1`
 - Fetch model list from `https://models.dev/api.json`
 - Cache model metadata with configurable TTL (default 15 minutes)
