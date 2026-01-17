@@ -1,8 +1,9 @@
-import * as vscode from 'vscode';
+import { randomUUID } from 'crypto';
 import { jsonSchema } from 'ai';
+import * as vscode from 'vscode';
 import { getApiKey } from './secrets';
 import { ModelRegistry } from './modelRegistry';
-import { streamZen } from './zenClient';
+import { OPENAI_COMPAT_PROVIDER_NAME, streamZen } from './zenClient';
 import { getOutputChannel } from './output';
 
 export const VENDOR_ID = 'opencode';
@@ -63,11 +64,28 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 		const toolNameMap = buildToolNameMap(options.tools, providerInfo?.npm);
 		const tools = options.tools ? toolsToAiSdkTools(options.tools, toolNameMap.toProvider) : undefined;
 		const coreMessages = messagesToAiSdkMessages(messages, toolNameMap.toProvider);
+		const promptCaching = getPromptCachingConfig();
+		const promptCacheKey =
+			promptCaching.enabled && promptCaching.cacheKeyScope !== 'none'
+				? await getOrCreatePromptCacheKey(this.context, promptCaching.cacheKeyScope)
+				: undefined;
+		const cacheRetention = promptCaching.enabled ? promptCaching.retention : undefined;
+		const anthropicCacheControl =
+			promptCaching.enabled && providerInfo?.npm === '@ai-sdk/anthropic'
+				? buildAnthropicCacheControl(promptCaching.anthropicTtl)
+				: undefined;
+		let cachedMessages = coreMessages;
+		if (promptCaching.enabled && anthropicCacheControl) {
+			cachedMessages = applyAnthropicCacheControl(coreMessages, anthropicCacheControl);
+		} else if (promptCaching.enabled && providerInfo?.npm === '@ai-sdk/openai-compatible') {
+			cachedMessages = applyOpenAICompatibleCacheControl(coreMessages);
+		}
 
 		const { debugFlag, modelOptions } = splitDebugOptions(options.modelOptions);
+		const providerOptions = buildProviderOptions(modelOptions, providerInfo?.npm, promptCacheKey, cacheRetention);
 
 		if (debugFlag) {
-			logDebugRequest(model, toolMode, options, coreMessages, tools, providerInfo);
+			logDebugRequest(model, toolMode, options, coreMessages, tools, providerInfo, providerOptions);
 		}
 
 		try {
@@ -75,15 +93,16 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 				{
 					apiKey,
 					modelId: model.id,
-					messages: coreMessages,
+					messages: cachedMessages,
 					tools,
 					toolMode,
 					abortSignal: abortController.signal,
-					modelOptions,
+					providerOptions,
 					providerNpm: providerInfo?.npm,
 					baseURL: providerInfo?.api,
 					toolNameMap: toolNameMap.toVsCode,
 					debugLogging: debugFlag,
+					includeUsage: promptCaching.enabled,
 				},
 				{
 					onTextDelta: (delta) => {
@@ -355,6 +374,167 @@ function mapToolName(name: string, toolNameMap: ReadonlyMap<string, string>): st
 	return toolNameMap.get(name) ?? name;
 }
 
+type PromptCachingConfig = {
+	enabled: boolean;
+	retention: 'in_memory' | '24h';
+	cacheKeyScope: 'workspace' | 'global' | 'none';
+	anthropicTtl: '5m' | '1h' | 'none';
+};
+
+function getPromptCachingConfig(): PromptCachingConfig {
+	const config = vscode.workspace.getConfiguration('opencodeZen');
+	return {
+		enabled: config.get<boolean>('promptCaching.enabled', true),
+		retention: config.get<'in_memory' | '24h'>('promptCaching.retention', 'in_memory'),
+		cacheKeyScope: config.get<'workspace' | 'global' | 'none'>('promptCaching.cacheKeyScope', 'workspace'),
+		anthropicTtl: config.get<'5m' | '1h' | 'none'>('promptCaching.anthropicTtl', '5m'),
+	};
+}
+
+async function getOrCreatePromptCacheKey(
+	context: vscode.ExtensionContext,
+	scope: 'workspace' | 'global'
+): Promise<string> {
+	const storage = scope === 'global' ? context.globalState : context.workspaceState;
+	const keyName = 'opencodeZen.promptCacheKey';
+	let key = storage.get<string>(keyName);
+	if (!key) {
+		key = randomUUID();
+		await storage.update(keyName, key);
+	}
+	return key;
+}
+
+function buildAnthropicCacheControl(ttl: '5m' | '1h' | 'none'): { type: 'ephemeral'; ttl?: '5m' | '1h' } {
+	if (ttl === 'none') {
+		return { type: 'ephemeral' };
+	}
+	return { type: 'ephemeral', ttl };
+}
+
+function applyAnthropicCacheControl(messages: any[], cacheControl: { type: 'ephemeral'; ttl?: '5m' | '1h' }): any[] {
+	if (!Array.isArray(messages) || messages.length === 0) {
+		return messages;
+	}
+
+	return applyCacheControlToMessages(messages, (message) => {
+		const existing = (message.providerOptions as Record<string, any> | undefined)?.anthropic;
+		if (existing?.cacheControl || existing?.cache_control) {
+			return message;
+		}
+		return {
+			...message,
+			providerOptions: mergeProviderOptions(message.providerOptions, { anthropic: { cacheControl } }),
+		};
+	});
+}
+
+function applyOpenAICompatibleCacheControl(messages: any[]): any[] {
+	if (!Array.isArray(messages) || messages.length === 0) {
+		return messages;
+	}
+
+	return applyCacheControlToMessages(messages, (message) => {
+		const existing = (message.providerOptions as Record<string, any> | undefined)?.openaiCompatible;
+		if (existing?.cache_control) {
+			return message;
+		}
+		return {
+			...message,
+			providerOptions: mergeProviderOptions(message.providerOptions, {
+				openaiCompatible: { cache_control: { type: 'ephemeral' } },
+			}),
+		};
+	});
+}
+
+function applyCacheControlToMessages(messages: any[], updater: (message: any) => any): any[] {
+	const systemIndices: number[] = [];
+	const nonSystemIndices: number[] = [];
+	for (let i = 0; i < messages.length; i++) {
+		const role = messages[i]?.role;
+		if (role === 'system') {
+			systemIndices.push(i);
+		} else {
+			nonSystemIndices.push(i);
+		}
+	}
+
+	const selected = new Set<number>();
+	for (const index of systemIndices.slice(0, 2)) {
+		selected.add(index);
+	}
+	for (const index of nonSystemIndices.slice(-2)) {
+		selected.add(index);
+	}
+
+	if (selected.size === 0) {
+		return messages;
+	}
+
+	return messages.map((message, index) => {
+		if (!selected.has(index) || !message || typeof message !== 'object') {
+			return message;
+		}
+		return updater(message);
+	});
+}
+
+function buildProviderOptions(
+	modelOptions: Record<string, unknown> | undefined,
+	providerNpm: string | undefined,
+	cacheKey: string | undefined,
+	retention: 'in_memory' | '24h' | undefined
+): Record<string, unknown> | undefined {
+	if (!cacheKey) {
+		return modelOptions;
+	}
+
+	const merged = modelOptions ? { ...modelOptions } : {};
+
+	if (providerNpm === '@ai-sdk/openai') {
+		const openai = { ...(merged.openai as Record<string, unknown> | undefined) };
+		openai.promptCacheKey = cacheKey;
+		if (retention) {
+			openai.promptCacheRetention = retention;
+		}
+		merged.openai = openai;
+		return merged;
+	}
+
+	if (providerNpm === '@ai-sdk/openai-compatible') {
+		const compatible = { ...(merged[OPENAI_COMPAT_PROVIDER_NAME] as Record<string, unknown> | undefined) };
+		compatible.prompt_cache_key = cacheKey;
+		if (retention) {
+			compatible.prompt_cache_retention = retention;
+		}
+		merged[OPENAI_COMPAT_PROVIDER_NAME] = compatible;
+		return merged;
+	}
+
+	return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function mergeProviderOptions(
+	base: Record<string, unknown> | undefined,
+	addition: Record<string, unknown>
+): Record<string, unknown> {
+	if (!base || typeof base !== 'object') {
+		return { ...addition };
+	}
+
+	const merged = { ...base } as Record<string, unknown>;
+	for (const [key, value] of Object.entries(addition)) {
+		const existing = merged[key];
+		if (existing && typeof existing === 'object' && value && typeof value === 'object') {
+			merged[key] = { ...(existing as Record<string, unknown>), ...(value as Record<string, unknown>) };
+		} else {
+			merged[key] = value;
+		}
+	}
+	return merged;
+}
+
 function splitDebugOptions(
 	modelOptions: vscode.ProvideLanguageModelChatResponseOptions['modelOptions'] | undefined
 ): { debugFlag: boolean; modelOptions?: Record<string, unknown> } {
@@ -375,7 +555,8 @@ function logDebugRequest(
 	options: vscode.ProvideLanguageModelChatResponseOptions,
 	coreMessages: any[],
 	tools: Record<string, any> | undefined,
-	providerInfo: { npm: string; api: string } | undefined
+	providerInfo: { npm: string; api: string } | undefined,
+	providerOptions: Record<string, unknown> | undefined,
 ): void {
 	const output = getOutputChannel();
 	output.info('Debug: provider request payload');
@@ -387,7 +568,7 @@ function logDebugRequest(
 		messages: coreMessages,
 		tools,
 		toolMode,
-		modelOptions: options.modelOptions ?? undefined,
+		providerOptions: providerOptions ?? options.modelOptions ?? undefined,
 		provider: providerInfo,
 	})}\n`);
 }

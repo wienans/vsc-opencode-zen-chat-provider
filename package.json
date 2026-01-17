@@ -3,7 +3,7 @@
   "publisher": "wienans",
   "displayName": "OpenCode Zen Provider",
   "description": "Provides OpenCode Zen models to VS Code's Language Model API.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "repository": {
     "type": "git",
     "url": "https://github.com/wienans/vsc-opencode-zen-chat-provider.git"
@@ -68,6 +68,29 @@
           "default": 15,
           "minimum": 0,
           "description": "How long to cache models.dev model metadata before refetching. 0 disables caching."
+        },
+        "opencodeZen.promptCaching.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable prompt caching hints for supported providers (Anthropic, OpenAI, OpenAI-compatible)."
+        },
+        "opencodeZen.promptCaching.retention": {
+          "type": "string",
+          "enum": ["in_memory", "24h"],
+          "default": "in_memory",
+          "description": "Retention policy for OpenAI prompt caching. '24h' requires a compatible OpenAI model."
+        },
+        "opencodeZen.promptCaching.cacheKeyScope": {
+          "type": "string",
+          "enum": ["workspace", "global", "none"],
+          "default": "workspace",
+          "description": "Scope for the prompt cache key used by OpenAI/OpenAI-compatible providers."
+        },
+        "opencodeZen.promptCaching.anthropicTtl": {
+          "type": "string",
+          "enum": ["5m", "1h", "none"],
+          "default": "5m",
+          "description": "Anthropic cache_control TTL for cached message blocks. 'none' omits TTL."
         }
       }
     }

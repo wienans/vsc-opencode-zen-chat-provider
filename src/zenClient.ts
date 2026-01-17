@@ -100,6 +100,8 @@ function normalizeToString(value: unknown): string {
 	}
 }
 
+export const OPENAI_COMPAT_PROVIDER_NAME = 'opencode-zen';
+
 export async function streamZen(
 	options: {
 		apiKey: string;
@@ -108,11 +110,12 @@ export async function streamZen(
 		tools?: Record<string, any>;
 		toolMode: ToolMode;
 		abortSignal: AbortSignal;
-		modelOptions?: Record<string, any>;
+		providerOptions?: Record<string, any>;
 		debugLogging?: boolean;
 		providerNpm?: string;
 		baseURL?: string;
 		toolNameMap?: ReadonlyMap<string, string>;
+		includeUsage?: boolean;
 	},
 	callbacks: StreamCallbacks
 ): Promise<void> {
@@ -122,7 +125,13 @@ export async function streamZen(
 
 	const baseURL = options.baseURL ?? ZEN_BASE_URL;
 	const providerNpm = options.providerNpm ?? '@ai-sdk/openai-compatible';
-	const provider = createProvider(providerNpm, options.apiKey, baseURL, options.debugLogging);
+	const provider = createProvider(
+		providerNpm,
+		options.apiKey,
+		baseURL,
+		options.debugLogging,
+		options.includeUsage
+	);
 	const endpointPath = getEndpointPath(providerNpm);
 
 	const result = streamText({
@@ -131,7 +140,18 @@ export async function streamZen(
 		tools: options.tools,
 		toolChoice: options.tools ? options.toolMode : undefined,
 		abortSignal: options.abortSignal,
-		providerOptions: options.modelOptions,
+		providerOptions: options.providerOptions,
+		onFinish: options.includeUsage
+			? (result) => {
+				const cachedTokens = extractCachedTokens(result?.usage);
+				if (cachedTokens) {
+					const output = getOutputChannel();
+					output.info(
+						`Prompt cache: read=${cachedTokens.read ?? 0}, write=${cachedTokens.write ?? 0}, cached=${cachedTokens.cached ?? 0}`
+					);
+				}
+			}
+			: undefined,
 	});
 
 	const requestBody: Record<string, unknown> = {
@@ -139,7 +159,7 @@ export async function streamZen(
 		messages: options.messages,
 		tools: options.tools,
 		tool_choice: options.tools ? options.toolMode : undefined,
-		provider_options: options.modelOptions ?? undefined,
+		provider_options: options.providerOptions ?? undefined,
 	};
 
 	let emitted = false;
@@ -201,22 +221,61 @@ function createProvider(
 	providerNpm: string,
 	apiKey: string,
 	baseURL: string,
-	debugLogging?: boolean
+	debugLogging?: boolean,
+	includeUsage?: boolean
 ): (modelId: string) => any {
 	switch (providerNpm) {
 		case '@ai-sdk/anthropic':
-			return createAnthropic({ apiKey, baseURL, fetch: debugLogging ? createDebugFetch() : undefined }) as any;
+			return createAnthropic({
+				apiKey,
+				baseURL,
+				fetch: debugLogging ? createDebugFetch() : undefined,
+			}) as any;
 		case '@ai-sdk/openai':
 			return createOpenAI({ apiKey, baseURL, fetch: debugLogging ? createDebugFetch() : undefined }) as any;
 		case '@ai-sdk/openai-compatible':
 		default:
 			return createOpenAICompatible({
-				name: 'opencode-zen',
+				name: OPENAI_COMPAT_PROVIDER_NAME,
 				apiKey,
 				baseURL,
 				fetch: debugLogging ? createDebugFetch() : undefined,
+				includeUsage,
+				transformRequestBody: (args) => applyOpenAICompatibleCaching(args),
 			});
 	}
+}
+
+function applyOpenAICompatibleCaching(args: Record<string, any>): Record<string, any> {
+	const providerOptions = args?.provider_options?.[OPENAI_COMPAT_PROVIDER_NAME];
+	const cacheKey = args.prompt_cache_key ?? providerOptions?.prompt_cache_key;
+	const retention = args.prompt_cache_retention ?? providerOptions?.prompt_cache_retention;
+
+	if (!cacheKey && !retention) {
+		return args;
+	}
+
+	return {
+		...args,
+		prompt_cache_key: cacheKey ?? args.prompt_cache_key,
+		prompt_cache_retention: retention ?? args.prompt_cache_retention,
+	};
+}
+
+function extractCachedTokens(usage: any): { read?: number; write?: number; cached?: number } | undefined {
+	if (!usage || typeof usage !== 'object') {
+		return undefined;
+	}
+	const cached =
+		usage?.prompt_tokens_details?.cached_tokens ??
+		usage?.input_tokens_details?.cached_tokens ??
+		usage?.cached_tokens;
+	const read = usage?.cache_read_input_tokens ?? usage?.cache_read_tokens;
+	const write = usage?.cache_creation_input_tokens ?? usage?.cache_write_tokens;
+	if (cached == null && read == null && write == null) {
+		return undefined;
+	}
+	return { cached, read, write };
 }
 
 function getEndpointPath(providerNpm: string): string {
