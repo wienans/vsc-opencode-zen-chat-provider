@@ -285,6 +285,9 @@ function languageModelToolResultContentToOutput(
 			continue;
 		}
 		if (part instanceof vscode.LanguageModelDataPart) {
+			if (part.mimeType === 'cache_control') {
+				continue;
+			}
 			if (part.mimeType.startsWith('text/')) {
 				const text = new TextDecoder('utf-8').decode(part.data);
 				textChunks.push(text);
@@ -324,7 +327,7 @@ function toolsToAiSdkTools(
 	for (const tool of tools) {
 		// AI SDK expects either a Zod schema or a JSON Schema wrapped with jsonSchema().
 		// VS Code provides plain JSON Schema objects, so we wrap them.
-		const schema = tool.inputSchema ?? { type: 'object', additionalProperties: true };
+		const schema = normalizeToolSchema(tool.inputSchema);
 		const name = mapToolName(tool.name, toolNameMap);
 		mapped[name] = {
 			description: tool.description,
@@ -333,6 +336,26 @@ function toolsToAiSdkTools(
 		};
 	}
 	return mapped;
+}
+
+function normalizeToolSchema(schema: unknown): unknown {
+	const fallback = { type: 'object', properties: {}, additionalProperties: true };
+	if (!schema || typeof schema !== 'object') {
+		return fallback;
+	}
+
+	const record = schema as Record<string, unknown>;
+	if (record.type === 'object') {
+		const hasProperties = typeof record.properties === 'object' && record.properties !== null;
+		return {
+			...record,
+			properties: hasProperties ? record.properties : {},
+			additionalProperties:
+				record.additionalProperties === undefined ? true : record.additionalProperties,
+		};
+	}
+
+	return record;
 }
 
 function buildToolNameMap(
@@ -495,7 +518,7 @@ function buildProviderOptions(
 	if (providerNpm === '@ai-sdk/openai') {
 		const openai = { ...(merged.openai as Record<string, unknown> | undefined) };
 		openai.promptCacheKey = cacheKey;
-		if (retention) {
+		if (retention && retention !== 'in_memory') {
 			openai.promptCacheRetention = retention;
 		}
 		merged.openai = openai;
@@ -505,7 +528,7 @@ function buildProviderOptions(
 	if (providerNpm === '@ai-sdk/openai-compatible') {
 		const compatible = { ...(merged[OPENAI_COMPAT_PROVIDER_NAME] as Record<string, unknown> | undefined) };
 		compatible.prompt_cache_key = cacheKey;
-		if (retention) {
+		if (retention && retention !== 'in_memory') {
 			compatible.prompt_cache_retention = retention;
 		}
 		merged[OPENAI_COMPAT_PROVIDER_NAME] = compatible;
