@@ -1,9 +1,14 @@
 {
   "name": "opencode-zen-chat-provider",
-  "publisher": "opencode",
-  "displayName": "OpenCode Zen",
+  "publisher": "wienans",
+  "displayName": "OpenCode Zen Provider",
   "description": "Provides OpenCode Zen models to VS Code's Language Model API.",
   "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wienans/vsc-opencode-zen-chat-provider.git"
+  },
+  "license": "MIT",
   "engines": {
     "vscode": "^1.104.0"
   },
@@ -11,6 +16,17 @@
     "AI",
     "Chat"
   ],
+  "keywords": [
+    "ai",
+    "claude",
+    "gpt",
+    "agent",
+    "coding",
+    "assistant",
+    "chat provider",
+    "opencode"
+  ],
+  "icon": "assets/icon.png",
   "main": "./out/extension.js",
   "activationEvents": [
     "onStartupFinished",
@@ -58,9 +74,6 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "download-api": "dts dev",
-    "postdownload-api": "dts main",
-    "postinstall": "npm run download-api",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint"
@@ -75,7 +88,7 @@
     "@eslint/js": "^9.13.0",
     "@stylistic/eslint-plugin": "^2.9.0",
     "@types/node": "^22.0.0",
-    "@types/vscode": "^1.108.1",
+    "@types/vscode": "^1.104.0",
     "@vscode/dts": "^0.4.1",
     "eslint": "^9.13.0",
     "typescript": "^5.9.2",
