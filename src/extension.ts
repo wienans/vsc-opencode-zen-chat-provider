@@ -40,7 +40,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 			const availableModels = await vscode.lm.selectChatModels({ vendor: VENDOR_ID });
 			if (availableModels.length === 0) {
-				vscode.window.showErrorMessage('No OpenCode Zen models available. Set API key and refresh models.');
+				output.error('No OpenCode Zen models available. Set API key and refresh models.');
 				return;
 			}
 
@@ -51,6 +51,8 @@ export function activate(context: vscode.ExtensionContext) {
 			if (!picked) {
 				return;
 			}
+
+			output.info(`Selected model: ${picked.model.name} (${picked.model.id})`);
 
 			const tool: vscode.LanguageModelChatTool = {
 				name: SELF_TEST_TOOL_NAME,
@@ -69,12 +71,20 @@ export function activate(context: vscode.ExtensionContext) {
 			];
 
 			const cts = new vscode.CancellationTokenSource();
+			const runContext: SelfTestContext = {
+				modelId: picked.model.id,
+				modelName: picked.model.name,
+				toolName: tool.name,
+				toolMode: 'required',
+				iteration: 0,
+				lastAssistantChars: 0,
+			};
 			try {
-				await runToolLoop(picked.model, messages, tool, output, cts.token);
+				await runToolLoop(picked.model, messages, tool, output, cts.token, runContext);
 				output.info('Self-test completed.');
 			} catch (err) {
-				output.error(`Self-test failed: ${err instanceof Error ? err.message : String(err)}`);
-				throw err;
+				logSelfTestFailure(output, err, runContext);
+				return;
 			} finally {
 				cts.dispose();
 			}
@@ -82,14 +92,186 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 }
 
+interface SelfTestContext {
+	modelId: string;
+	modelName: string;
+	toolName: string;
+	toolMode: 'required' | 'auto';
+	iteration: number;
+	lastToolCall?: { name: string; callId: string; input?: object };
+	lastAssistantSample?: string;
+	lastAssistantChars: number;
+}
+
+type ErrorDetails = {
+	statusCode?: number;
+	statusText?: string;
+	responseBody?: string;
+	requestId?: string;
+	url?: string;
+	requestBody?: unknown;
+	originalMessage?: string;
+};
+
+function logSelfTestFailure(output: vscode.LogOutputChannel, err: unknown, context: SelfTestContext): void {
+	output.error('Self-test failed.');
+	output.info(`Model: ${context.modelName} (${context.modelId})`);
+	output.info(`Tool: ${context.toolName} (mode: ${context.toolMode})`);
+	output.info(`Iteration: ${context.iteration}`);
+
+	if (context.lastToolCall) {
+		const input = context.lastToolCall.input ? safeJson(context.lastToolCall.input) : '(none)';
+		output.info(`Last tool call: ${context.lastToolCall.name} (${context.lastToolCall.callId})`);
+		output.info(`Last tool input: ${input}`);
+	}
+
+	if (context.lastAssistantSample) {
+		output.info(`Last assistant output (tail ${context.lastAssistantChars} chars):`);
+		output.append(`\n${context.lastAssistantSample}\n`);
+	}
+
+	const message = err instanceof Error ? err.message : String(err);
+	output.info(`Error message: ${message}`);
+
+	const details = extractErrorDetails(err);
+	if (details.originalMessage && details.originalMessage !== message) {
+		output.info(`Original error: ${details.originalMessage}`);
+	}
+	if (details.statusCode) {
+		output.info(`Status: ${details.statusCode}${details.statusText ? ` ${details.statusText}` : ''}`);
+	}
+	if (details.url) {
+		output.info(`URL: ${details.url}`);
+	}
+	if (details.requestId) {
+		output.info(`Request ID: ${details.requestId}`);
+	}
+	if (details.responseBody !== undefined) {
+		output.info('Response body (raw):');
+		output.append(`\n${details.responseBody}\n`);
+	}
+	if (details.requestBody !== undefined) {
+		output.info('Request body:');
+		output.append(`\n${safeJson(details.requestBody)}\n`);
+	}
+
+	output.info('Error object (raw):');
+	output.append(`\n${safeJson(serializeError(err))}\n`);
+}
+
+function extractErrorDetails(err: unknown): ErrorDetails {
+	const record = (value: unknown): Record<string, unknown> | undefined => {
+		if (value && typeof value === 'object') {
+			return value as Record<string, unknown>;
+		}
+		return undefined;
+	};
+
+	const candidates = [record(err), record((err as { cause?: unknown })?.cause)].filter(Boolean) as Record<string, unknown>[];
+	const details: ErrorDetails = {};
+
+	for (const candidate of candidates) {
+		if (details.statusCode === undefined) {
+			const status = candidate.statusCode ?? candidate.status;
+			if (typeof status === 'number') {
+				details.statusCode = status;
+			}
+		}
+		if (details.statusText === undefined && typeof candidate.statusText === 'string') {
+			details.statusText = candidate.statusText;
+		}
+		if (details.url === undefined && typeof candidate.url === 'string') {
+			details.url = candidate.url;
+		}
+		if (details.requestId === undefined && typeof candidate.requestId === 'string') {
+			details.requestId = candidate.requestId;
+		}
+		if (details.responseBody === undefined && candidate.responseBody !== undefined) {
+			details.responseBody = normalizeToString(candidate.responseBody);
+		}
+		if (details.requestBody === undefined && candidate.requestBody !== undefined) {
+			details.requestBody = candidate.requestBody;
+		}
+		if (details.originalMessage === undefined && typeof candidate.message === 'string') {
+			details.originalMessage = candidate.message;
+		}
+	}
+
+	return details;
+}
+
+function normalizeToString(value: unknown): string {
+	if (typeof value === 'string') {
+		return value;
+	}
+	if (value instanceof Uint8Array) {
+		return Buffer.from(value).toString('utf-8');
+	}
+	try {
+		return JSON.stringify(value, null, 2);
+	} catch {
+		return String(value);
+	}
+}
+
+function safeJson(value: unknown): string {
+	try {
+		return JSON.stringify(value, null, 2);
+	} catch {
+		return String(value);
+	}
+}
+
+function serializeError(err: unknown): unknown {
+	const seen = new Set<unknown>();
+
+	const toPlain = (value: unknown, depth: number): unknown => {
+		if (value === null || value === undefined) {
+			return value;
+		}
+		if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+			return value;
+		}
+		if (value instanceof Uint8Array) {
+			return Buffer.from(value).toString('utf-8');
+		}
+		if (typeof value !== 'object') {
+			return String(value);
+		}
+		if (seen.has(value)) {
+			return '[Circular]';
+		}
+		seen.add(value);
+		if (depth <= 0) {
+			return '[MaxDepth]';
+		}
+
+		const record = value as Record<string, unknown>;
+		const out: Record<string, unknown> = {};
+		for (const key of Object.getOwnPropertyNames(record)) {
+			out[key] = toPlain(record[key], depth - 1);
+		}
+		if ('cause' in record) {
+			out.cause = toPlain(record.cause, depth - 1);
+		}
+		return out;
+	};
+
+	return toPlain(err, 4);
+}
+
 async function runToolLoop(
 	model: vscode.LanguageModelChat,
 	messages: vscode.LanguageModelChatMessage[],
 	tool: vscode.LanguageModelChatTool,
 	output: vscode.LogOutputChannel,
-	token: vscode.CancellationToken
+	token: vscode.CancellationToken,
+	context: SelfTestContext
 ): Promise<void> {
 	for (let i = 0; i < 5; i++) {
+		context.iteration = i + 1;
+		output.info(`Self-test iteration ${context.iteration}...`);
+
 		const response = await model.sendRequest(
 			messages,
 			{
@@ -102,17 +284,24 @@ async function runToolLoop(
 
 		const assistantParts: Array<vscode.LanguageModelTextPart | vscode.LanguageModelToolCallPart | vscode.LanguageModelDataPart> = [];
 		const toolCalls: vscode.LanguageModelToolCallPart[] = [];
+		let assistantTail = context.lastAssistantSample ?? '';
 
 		for await (const part of response.stream) {
 			if (part instanceof vscode.LanguageModelTextPart) {
 				assistantParts.push(part);
 				output.append(part.value);
+				if (part.value) {
+					assistantTail = (assistantTail + part.value).slice(-1000);
+					context.lastAssistantSample = assistantTail;
+					context.lastAssistantChars = assistantTail.length;
+				}
 				continue;
 			}
 
 			if (part instanceof vscode.LanguageModelToolCallPart) {
 				assistantParts.push(part);
 				toolCalls.push(part);
+				context.lastToolCall = { name: part.name, callId: part.callId, input: part.input as object | undefined };
 				output.info(`\nTool call requested: ${part.name} (${part.callId})`);
 				continue;
 			}

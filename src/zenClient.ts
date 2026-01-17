@@ -10,18 +10,91 @@ export type StreamCallbacks = {
 	onToolCall: (args: { toolCallId: string; toolName: string; input: object }) => void;
 };
 
-function wrapApiError(err: unknown): Error {
-	if (err instanceof Error) {
-		const msg = err.message;
-		if (msg.includes('Unauthorized') || msg.includes('401')) {
-			return new Error('Unauthorized: Please check your OpenCode API key. Run "OpenCode Zen: Set API Key" to update it.');
-		}
-		if (msg.includes('404') || msg.includes('Not Found')) {
-			return new Error(`Model not found. The requested model may not be available.`);
-		}
-		return err;
+type ApiErrorDetails = {
+	statusCode?: number;
+	statusText?: string;
+	responseBody?: string;
+	requestId?: string;
+	url?: string;
+	requestBody?: unknown;
+	originalMessage?: string;
+};
+
+function wrapApiError(err: unknown, extra?: Partial<ApiErrorDetails>): Error {
+	const details = { ...extractErrorDetails(err), ...(extra ?? {}) };
+	const baseMessage = err instanceof Error ? err.message : String(err);
+
+	if (baseMessage.includes('Unauthorized') || baseMessage.includes('401')) {
+		const wrapped = new Error(
+			'Unauthorized: Please check your OpenCode API key. Run "OpenCode Zen: Set API Key" to update it.',
+			{ cause: err instanceof Error ? err : undefined }
+		);
+		return Object.assign(wrapped, details);
 	}
-	return new Error(String(err));
+	if (baseMessage.includes('404') || baseMessage.includes('Not Found')) {
+		const wrapped = new Error('Model not found. The requested model may not be available.', {
+			cause: err instanceof Error ? err : undefined,
+		});
+		return Object.assign(wrapped, details);
+	}
+
+	const wrapped = new Error(baseMessage, { cause: err instanceof Error ? err : undefined });
+	return Object.assign(wrapped, details);
+}
+
+function extractErrorDetails(err: unknown): ApiErrorDetails {
+	const record = (value: unknown): Record<string, unknown> | undefined => {
+		if (value && typeof value === 'object') {
+			return value as Record<string, unknown>;
+		}
+		return undefined;
+	};
+
+	const candidates = [record(err), record((err as { cause?: unknown })?.cause)].filter(Boolean) as Record<string, unknown>[];
+	const details: ApiErrorDetails = {};
+
+	for (const candidate of candidates) {
+		if (details.statusCode === undefined) {
+			const status = candidate.statusCode ?? candidate.status;
+			if (typeof status === 'number') {
+				details.statusCode = status;
+			}
+		}
+		if (details.statusText === undefined && typeof candidate.statusText === 'string') {
+			details.statusText = candidate.statusText;
+		}
+		if (details.url === undefined && typeof candidate.url === 'string') {
+			details.url = candidate.url;
+		}
+		if (details.requestId === undefined && typeof candidate.requestId === 'string') {
+			details.requestId = candidate.requestId;
+		}
+		if (details.responseBody === undefined && candidate.responseBody !== undefined) {
+			details.responseBody = normalizeToString(candidate.responseBody);
+		}
+		if (details.requestBody === undefined && candidate.requestBody !== undefined) {
+			details.requestBody = candidate.requestBody;
+		}
+		if (details.originalMessage === undefined && typeof candidate.message === 'string') {
+			details.originalMessage = candidate.message;
+		}
+	}
+
+	return details;
+}
+
+function normalizeToString(value: unknown): string {
+	if (typeof value === 'string') {
+		return value;
+	}
+	if (value instanceof Uint8Array) {
+		return Buffer.from(value).toString('utf-8');
+	}
+	try {
+		return JSON.stringify(value, null, 2);
+	} catch {
+		return String(value);
+	}
 }
 
 export async function streamZen(
@@ -57,6 +130,14 @@ export async function streamZen(
 		toolCallStreaming: false,
 	});
 
+	const requestBody: Record<string, unknown> = {
+		model: options.modelId,
+		messages: options.messages,
+		tools: options.tools,
+		tool_choice: options.tools ? options.toolMode : undefined,
+		provider_options: options.modelOptions ?? undefined,
+	};
+
 	let emitted = false;
 	let sawAnyChunk = false;
 
@@ -91,13 +172,19 @@ export async function streamZen(
 			}
 
 			if (part.type === 'error') {
-				throw wrapApiError(part.error);
+				throw wrapApiError(part.error, {
+					requestBody,
+					url: `${ZEN_BASE_URL}/chat/completions`,
+				});
 			}
 
 			// Ignore finish/metadata parts.
 		}
 	} catch (err) {
-		throw wrapApiError(err);
+		throw wrapApiError(err, {
+			requestBody,
+			url: `${ZEN_BASE_URL}/chat/completions`,
+		});
 	}
 
 	// VS Code shows "Sorry, no response was returned" if we emit nothing.
