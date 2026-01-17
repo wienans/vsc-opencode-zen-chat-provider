@@ -179,7 +179,7 @@ function mapVsCodeMessageToAiSdkMessages(
 				type: 'tool-result',
 				toolCallId: part.callId,
 				toolName,
-				result: languageModelToolResultContentToResult(part.content),
+				output: languageModelToolResultContentToOutput(part.content),
 			});
 			continue;
 		}
@@ -247,27 +247,54 @@ function dataPartToAiSdkPart(part: vscode.LanguageModelDataPart): any | undefine
 	return { type: 'file', data: Buffer.from(part.data), mimeType: part.mimeType };
 }
 
-function languageModelToolResultContentToResult(
+function languageModelToolResultContentToOutput(
 	content: Array<vscode.LanguageModelTextPart | vscode.LanguageModelPromptTsxPart | vscode.LanguageModelDataPart | unknown>
-): unknown {
-	// Preserve structure as best as possible without leaking VS Code classes to the provider.
-	return content
-		.map((part) => {
-			if (part instanceof vscode.LanguageModelTextPart) {
-				return part.value;
+): { type: 'text'; value: string } | { type: 'json'; value: unknown } | { type: 'content'; value: Array<any> } {
+	const parts: Array<any> = [];
+	const textChunks: string[] = [];
+
+	for (const part of content) {
+		if (part instanceof vscode.LanguageModelTextPart) {
+			textChunks.push(part.value);
+			parts.push({ type: 'text', text: part.value });
+			continue;
+		}
+		if (part instanceof vscode.LanguageModelPromptTsxPart) {
+			const text = String(part.value);
+			textChunks.push(text);
+			parts.push({ type: 'text', text });
+			continue;
+		}
+		if (part instanceof vscode.LanguageModelDataPart) {
+			if (part.mimeType.startsWith('text/')) {
+				const text = new TextDecoder('utf-8').decode(part.data);
+				textChunks.push(text);
+				parts.push({ type: 'text', text });
+				continue;
 			}
-			if (part instanceof vscode.LanguageModelPromptTsxPart) {
-				return part.value;
+			const base64 = Buffer.from(part.data).toString('base64');
+			if (part.mimeType.startsWith('image/')) {
+				parts.push({ type: 'image-data', data: base64, mediaType: part.mimeType });
+				continue;
 			}
-			if (part instanceof vscode.LanguageModelDataPart) {
-				if (part.mimeType.startsWith('text/')) {
-					return new TextDecoder('utf-8').decode(part.data);
-				}
-				return { mimeType: part.mimeType, data: Buffer.from(part.data).toString('base64') };
-			}
-			return part;
-		})
-		.filter((x) => x !== undefined);
+			parts.push({ type: 'file-data', data: base64, mediaType: part.mimeType });
+			continue;
+		}
+
+		if (part !== undefined) {
+			parts.push({ type: 'custom', value: part });
+		}
+	}
+
+	if (parts.length === 0) {
+		return { type: 'text', value: '' };
+	}
+
+	if (parts.every((p) => p.type === 'text')) {
+		return { type: 'text', value: textChunks.join('') };
+	}
+
+	return { type: 'content', value: parts };
 }
 
 function toolsToAiSdkTools(
