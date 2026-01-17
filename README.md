@@ -29,6 +29,11 @@ npm run compile
 npm run watch
 ```
 
+## Create Extension Package
+```bash
+vsce package
+```
+
 ## Run (Extension Development Host)
 
 1. Open this folder in VS Code
