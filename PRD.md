@@ -85,6 +85,9 @@
   - Minimum: 0
   - Description: Cache TTL for models.dev metadata
 
+### 10) Prompt Caching Support
+- **Prompt caching:** Supports caching of prompts on provider side to reduce API Cost (cache_control, cacheKey)
+
 ## System Behavior
 
 ### Activation
