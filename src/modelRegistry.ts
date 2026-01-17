@@ -10,6 +10,10 @@ export type ModelsDevProvider = {
 	models: Record<string, ModelsDevModel>;
 };
 
+export type ModelsDevModelProvider = {
+	npm?: string;
+};
+
 export type ModelsDevModel = {
 	id: string;
 	name: string;
@@ -18,6 +22,7 @@ export type ModelsDevModel = {
 	reasoning: boolean;
 	tool_call: boolean;
 	temperature: boolean;
+	provider?: ModelsDevModelProvider;
 	knowledge?: string;
 	release_date?: string;
 	last_updated?: string;
@@ -36,12 +41,16 @@ export class ModelRegistry {
 
 	private cachedAtMs: number | undefined;
 	private cachedModels: vscode.LanguageModelChatInformation[] | undefined;
+	private providerDefaults: { npm: string; api: string } | undefined;
+	private modelProviderOverrides = new Map<string, string>();
 
 	constructor(private readonly context: vscode.ExtensionContext) {}
 
 	invalidate(): void {
 		this.cachedAtMs = undefined;
 		this.cachedModels = undefined;
+		this.providerDefaults = undefined;
+		this.modelProviderOverrides.clear();
 		this._onDidChange.fire();
 	}
 
@@ -70,6 +79,13 @@ export class ModelRegistry {
 			throw new Error(`Provider '${PROVIDER_ID}' not found in models.dev api.json`);
 		}
 
+		this.providerDefaults = { npm: provider.npm, api: provider.api };
+		this.modelProviderOverrides = new Map(
+			Object.values(provider.models)
+				.filter((m) => Boolean(m.provider?.npm))
+				.map((m) => [m.id, m.provider?.npm as string])
+		);
+
 		const models = Object.values(provider.models)
 			.sort((a, b) => a.name.localeCompare(b.name))
 			.map((m) => this.toChatInfo(provider, m));
@@ -77,6 +93,22 @@ export class ModelRegistry {
 		this.cachedModels = models;
 		this.cachedAtMs = now;
 		return models;
+	}
+
+	async getModelProviderInfo(modelId: string): Promise<{ npm: string; api: string } | undefined> {
+		if (!this.providerDefaults || !this.cachedModels) {
+			await this.getModels();
+		}
+
+		if (!this.providerDefaults) {
+			return undefined;
+		}
+
+		const override = this.modelProviderOverrides.get(modelId);
+		return {
+			npm: override ?? this.providerDefaults.npm,
+			api: this.providerDefaults.api,
+		};
 	}
 
 	private toChatInfo(provider: ModelsDevProvider, model: ModelsDevModel): vscode.LanguageModelChatInformation {

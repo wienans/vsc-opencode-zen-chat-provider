@@ -1,12 +1,13 @@
 import * as vscode from 'vscode';
 import { OpenCodeZenChatProvider, VENDOR_ID } from './provider';
+import { getOutputChannel } from './output';
 import { clearApiKey, setApiKey } from './secrets';
 
 const SELF_TEST_TOOL_NAME = 'opencodeZen.selfTest.getTime';
 
 export function activate(context: vscode.ExtensionContext) {
 	const provider = new OpenCodeZenChatProvider(context);
-	const output = vscode.window.createOutputChannel('OpenCode Zen', { log: true });
+	const output = getOutputChannel();
 
 	context.subscriptions.push(
 		output,
@@ -278,6 +279,7 @@ async function runToolLoop(
 				justification: 'OpenCode Zen self-test: verify streaming + tool calling.',
 				tools: [tool],
 				toolMode: vscode.LanguageModelChatToolMode.Required,
+				modelOptions: { __opencodeDebugSelfTest: true },
 			},
 			token
 		);

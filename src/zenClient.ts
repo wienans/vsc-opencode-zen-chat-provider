@@ -1,5 +1,8 @@
+import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { streamText, type CoreMessage } from 'ai';
+import { createOpenAI } from '@ai-sdk/openai';
+import { streamText, type ModelMessage } from 'ai';
+import { getOutputChannel } from './output';
 
 export const ZEN_BASE_URL = 'https://opencode.ai/zen/v1';
 
@@ -101,11 +104,15 @@ export async function streamZen(
 	options: {
 		apiKey: string;
 		modelId: string;
-		messages: CoreMessage[];
+		messages: ModelMessage[];
 		tools?: Record<string, any>;
 		toolMode: ToolMode;
 		abortSignal: AbortSignal;
 		modelOptions?: Record<string, any>;
+		debugLogging?: boolean;
+		providerNpm?: string;
+		baseURL?: string;
+		toolNameMap?: ReadonlyMap<string, string>;
 	},
 	callbacks: StreamCallbacks
 ): Promise<void> {
@@ -113,21 +120,18 @@ export async function streamZen(
 		throw new Error('OpenCode Zen API key is empty. Run "OpenCode Zen: Set API Key" to configure it.');
 	}
 
-	const zen = createOpenAICompatible({
-		name: 'opencode-zen',
-		apiKey: options.apiKey,
-		baseURL: ZEN_BASE_URL,
-	});
+	const baseURL = options.baseURL ?? ZEN_BASE_URL;
+	const providerNpm = options.providerNpm ?? '@ai-sdk/openai-compatible';
+	const provider = createProvider(providerNpm, options.apiKey, baseURL, options.debugLogging);
+	const endpointPath = getEndpointPath(providerNpm);
 
 	const result = streamText({
-		model: zen(options.modelId),
+		model: provider(options.modelId),
 		messages: options.messages,
 		tools: options.tools,
 		toolChoice: options.tools ? options.toolMode : undefined,
 		abortSignal: options.abortSignal,
 		providerOptions: options.modelOptions,
-		// Avoid tool-call streaming deltas; we want complete tool calls.
-		toolCallStreaming: false,
 	});
 
 	const requestBody: Record<string, unknown> = {
@@ -146,17 +150,17 @@ export async function streamZen(
 			sawAnyChunk = true;
 
 			if (part.type === 'text-delta') {
-				emitted = emitted || part.textDelta.length > 0;
-				callbacks.onTextDelta(part.textDelta);
+				emitted = emitted || part.text.length > 0;
+				callbacks.onTextDelta(part.text);
 				continue;
 			}
 
 			// Some providers emit reasoning tokens separately. VS Code doesn't have a reasoning response part,
 			// so we surface it as normal text.
-			if (part.type === 'reasoning') {
-				if (part.textDelta && part.textDelta.length > 0) {
+			if (part.type === 'reasoning-delta') {
+				if (part.text && part.text.length > 0) {
 					emitted = true;
-					callbacks.onTextDelta(part.textDelta);
+					callbacks.onTextDelta(part.text);
 				}
 				continue;
 			}
@@ -165,8 +169,8 @@ export async function streamZen(
 				emitted = true;
 				callbacks.onToolCall({
 					toolCallId: part.toolCallId,
-					toolName: part.toolName,
-					input: (part.args ?? {}) as object,
+					toolName: options.toolNameMap?.get(part.toolName) ?? part.toolName,
+					input: (part.input ?? {}) as object,
 				});
 				continue;
 			}
@@ -174,7 +178,7 @@ export async function streamZen(
 			if (part.type === 'error') {
 				throw wrapApiError(part.error, {
 					requestBody,
-					url: `${ZEN_BASE_URL}/chat/completions`,
+					url: `${baseURL}${endpointPath}`,
 				});
 			}
 
@@ -183,12 +187,126 @@ export async function streamZen(
 	} catch (err) {
 		throw wrapApiError(err, {
 			requestBody,
-			url: `${ZEN_BASE_URL}/chat/completions`,
+			url: `${baseURL}${endpointPath}`,
 		});
 	}
 
 	// VS Code shows "Sorry, no response was returned" if we emit nothing.
 	if (!emitted) {
 		callbacks.onTextDelta(sawAnyChunk ? '\n' : 'No response returned by model.');
+	}
+}
+
+function createProvider(
+	providerNpm: string,
+	apiKey: string,
+	baseURL: string,
+	debugLogging?: boolean
+): (modelId: string) => any {
+	switch (providerNpm) {
+		case '@ai-sdk/anthropic':
+			return createAnthropic({ apiKey, baseURL, fetch: debugLogging ? createDebugFetch() : undefined }) as any;
+		case '@ai-sdk/openai':
+			return createOpenAI({ apiKey, baseURL, fetch: debugLogging ? createDebugFetch() : undefined }) as any;
+		case '@ai-sdk/openai-compatible':
+		default:
+			return createOpenAICompatible({
+				name: 'opencode-zen',
+				apiKey,
+				baseURL,
+				fetch: debugLogging ? createDebugFetch() : undefined,
+			});
+	}
+}
+
+function getEndpointPath(providerNpm: string): string {
+	if (providerNpm === '@ai-sdk/anthropic') {
+		return '/messages';
+	}
+	if (providerNpm === '@ai-sdk/openai') {
+		return '/responses';
+	}
+	return '/chat/completions';
+}
+
+function createDebugFetch(): typeof fetch {
+	const output = getOutputChannel();
+
+	return async (input, init) => {
+		const requestInfo = await serializeRequest(input, init);
+		output.info('Debug: HTTP request');
+		output.append(`\n${requestInfo}\n`);
+
+		const response = await fetch(input, init);
+		const responseInfo = await serializeResponse(response);
+
+		if (!response.ok) {
+			output.error('Debug: HTTP response (non-OK)');
+			output.append(`\n${responseInfo}\n`);
+		} else {
+			output.info('Debug: HTTP response');
+			output.append(`\n${responseInfo}\n`);
+		}
+
+		return response;
+	};
+}
+
+async function serializeRequest(
+	input: Parameters<typeof fetch>[0],
+	init?: Parameters<typeof fetch>[1]
+): Promise<string> {
+	const request = new Request(input, init);
+	const headers = redactHeaders(request.headers);
+	let body: string | undefined;
+	try {
+		body = await request.clone().text();
+	} catch {
+		body = undefined;
+	}
+
+	return safeJson({
+		method: request.method,
+		url: request.url,
+		headers,
+		body: body && body.length > 0 ? body : undefined,
+	});
+}
+
+async function serializeResponse(response: Response): Promise<string> {
+	let bodyText: string | undefined;
+	try {
+		bodyText = await response.clone().text();
+	} catch {
+		bodyText = undefined;
+	}
+
+	return safeJson({
+		status: response.status,
+		statusText: response.statusText,
+		url: response.url,
+		headers: redactHeaders(response.headers),
+		body: bodyText && bodyText.length > 0 ? bodyText : undefined,
+	});
+}
+
+function redactHeaders(headers: Headers): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const [key, value] of headers.entries()) {
+		const lower = key.toLowerCase();
+		if (lower === 'authorization' || lower === 'x-api-key') {
+			out[key] = '[REDACTED]';
+			continue;
+		}
+		out[key] = value;
+	}
+	return out;
+}
+
+function safeJson(value: unknown): string {
+	try {
+		return JSON.stringify(value, null, 2);
+	} catch {
+		return String(value);
 	}
 }

@@ -3,6 +3,7 @@ import { jsonSchema } from 'ai';
 import { getApiKey } from './secrets';
 import { ModelRegistry } from './modelRegistry';
 import { streamZen } from './zenClient';
+import { getOutputChannel } from './output';
 
 export const VENDOR_ID = 'opencode';
 
@@ -58,30 +59,49 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 		token.onCancellationRequested(() => abortController.abort());
 
 		const toolMode = options.toolMode === vscode.LanguageModelChatToolMode.Required ? 'required' : 'auto';
-		const tools = options.tools ? toolsToAiSdkTools(options.tools) : undefined;
-		const coreMessages = messagesToAiSdkMessages(messages);
+		const providerInfo = await this.registry.getModelProviderInfo(model.id);
+		const toolNameMap = buildToolNameMap(options.tools, providerInfo?.npm);
+		const tools = options.tools ? toolsToAiSdkTools(options.tools, toolNameMap.toProvider) : undefined;
+		const coreMessages = messagesToAiSdkMessages(messages, toolNameMap.toProvider);
 
-		await streamZen(
-			{
-				apiKey,
-				modelId: model.id,
-				messages: coreMessages,
-				tools,
-				toolMode,
-				abortSignal: abortController.signal,
-				modelOptions: options.modelOptions ?? undefined,
-			},
-			{
-				onTextDelta: (delta) => {
-					if (delta) {
-						progress.report(new vscode.LanguageModelTextPart(delta));
-					}
+		const { debugFlag, modelOptions } = splitDebugOptions(options.modelOptions);
+
+		if (debugFlag) {
+			logDebugRequest(model, toolMode, options, coreMessages, tools, providerInfo);
+		}
+
+		try {
+			await streamZen(
+				{
+					apiKey,
+					modelId: model.id,
+					messages: coreMessages,
+					tools,
+					toolMode,
+					abortSignal: abortController.signal,
+					modelOptions,
+					providerNpm: providerInfo?.npm,
+					baseURL: providerInfo?.api,
+					toolNameMap: toolNameMap.toVsCode,
+					debugLogging: debugFlag,
 				},
-				onToolCall: ({ toolCallId, toolName, input }) => {
-					progress.report(new vscode.LanguageModelToolCallPart(toolCallId, toolName, input));
-				},
+				{
+					onTextDelta: (delta) => {
+						if (delta) {
+							progress.report(new vscode.LanguageModelTextPart(delta));
+						}
+					},
+					onToolCall: ({ toolCallId, toolName, input }) => {
+						progress.report(new vscode.LanguageModelToolCallPart(toolCallId, toolName, input));
+					},
+				}
+			);
+		} catch (err) {
+			if (debugFlag) {
+				logDebugError(model, toolMode, options, coreMessages, tools, providerInfo, err);
 			}
-		);
+			throw err;
+		}
 	}
 
 	async provideTokenCount(
@@ -95,14 +115,17 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 	}
 }
 
-function messagesToAiSdkMessages(messages: readonly vscode.LanguageModelChatRequestMessage[]): any[] {
+function messagesToAiSdkMessages(
+	messages: readonly vscode.LanguageModelChatRequestMessage[],
+	toolNameMap: ReadonlyMap<string, string>
+): any[] {
 	// We use `any` to avoid hard-coupling to ai-sdk's evolving CoreMessage shape.
 	// But we must still satisfy AI SDK runtime validation.
 	const toolNameByCallId = new Map<string, string>();
 	for (const message of messages) {
 		for (const part of message.content) {
 			if (part instanceof vscode.LanguageModelToolCallPart) {
-				toolNameByCallId.set(part.callId, part.name);
+				toolNameByCallId.set(part.callId, mapToolName(part.name, toolNameMap));
 			}
 		}
 	}
@@ -110,7 +133,7 @@ function messagesToAiSdkMessages(messages: readonly vscode.LanguageModelChatRequ
 	const out: any[] = [];
 
 	for (const message of messages) {
-		const mapped = mapVsCodeMessageToAiSdkMessages(message, toolNameByCallId);
+		const mapped = mapVsCodeMessageToAiSdkMessages(message, toolNameByCallId, toolNameMap);
 		out.push(...mapped);
 	}
 
@@ -119,7 +142,8 @@ function messagesToAiSdkMessages(messages: readonly vscode.LanguageModelChatRequ
 
 function mapVsCodeMessageToAiSdkMessages(
 	message: vscode.LanguageModelChatRequestMessage,
-	toolNameByCallId: ReadonlyMap<string, string>
+	toolNameByCallId: ReadonlyMap<string, string>,
+	toolNameMap: ReadonlyMap<string, string>
 ): any[] {
 	const isUser = message.role === vscode.LanguageModelChatMessageRole.User;
 
@@ -143,14 +167,14 @@ function mapVsCodeMessageToAiSdkMessages(
 			assistantParts.push({
 				type: 'tool-call',
 				toolCallId: part.callId,
-				toolName: part.name,
-				args: part.input,
+				toolName: mapToolName(part.name, toolNameMap),
+				input: part.input,
 			});
 			continue;
 		}
 
 		if (part instanceof vscode.LanguageModelToolResultPart) {
-			const toolName = toolNameByCallId.get(part.callId) ?? 'unknown';
+			const toolName = toolNameByCallId.get(part.callId) ?? mapToolName('unknown', toolNameMap);
 			toolResultParts.push({
 				type: 'tool-result',
 				toolCallId: part.callId,
@@ -246,17 +270,167 @@ function languageModelToolResultContentToResult(
 		.filter((x) => x !== undefined);
 }
 
-function toolsToAiSdkTools(tools: readonly vscode.LanguageModelChatTool[]): Record<string, any> {
+function toolsToAiSdkTools(
+	tools: readonly vscode.LanguageModelChatTool[],
+	toolNameMap: ReadonlyMap<string, string>
+): Record<string, any> {
 	const mapped: Record<string, any> = {};
 	for (const tool of tools) {
 		// AI SDK expects either a Zod schema or a JSON Schema wrapped with jsonSchema().
 		// VS Code provides plain JSON Schema objects, so we wrap them.
 		const schema = tool.inputSchema ?? { type: 'object', additionalProperties: true };
-		mapped[tool.name] = {
+		const name = mapToolName(tool.name, toolNameMap);
+		mapped[name] = {
 			description: tool.description,
-			parameters: jsonSchema(schema as any),
+			inputSchema: jsonSchema(schema as any),
 			// No `execute`: VS Code invokes tools and sends results back on next turn.
 		};
 	}
 	return mapped;
+}
+
+function buildToolNameMap(
+	tools: readonly vscode.LanguageModelChatTool[] | undefined,
+	providerNpm: string | undefined
+): { toProvider: Map<string, string>; toVsCode: Map<string, string> } {
+	const toProvider = new Map<string, string>();
+	const toVsCode = new Map<string, string>();
+
+	if (!tools || tools.length === 0) {
+		return { toProvider, toVsCode };
+	}
+
+	const needsSanitize = providerNpm === '@ai-sdk/anthropic' || providerNpm === '@ai-sdk/openai';
+	const used = new Set<string>();
+
+	for (const tool of tools) {
+		const baseName = needsSanitize ? sanitizeToolName(tool.name) : tool.name;
+		let name = baseName;
+		let suffix = 1;
+		while (used.has(name)) {
+			name = `${baseName}_${suffix++}`.slice(0, 128);
+		}
+		used.add(name);
+		toProvider.set(tool.name, name);
+		toVsCode.set(name, tool.name);
+	}
+
+	return { toProvider, toVsCode };
+}
+
+function sanitizeToolName(name: string): string {
+	const cleaned = name.replace(/[^a-zA-Z0-9_-]/g, '_');
+	const trimmed = cleaned.length > 0 ? cleaned.slice(0, 128) : 'tool';
+	return trimmed;
+}
+
+function mapToolName(name: string, toolNameMap: ReadonlyMap<string, string>): string {
+	return toolNameMap.get(name) ?? name;
+}
+
+function splitDebugOptions(
+	modelOptions: vscode.ProvideLanguageModelChatResponseOptions['modelOptions'] | undefined
+): { debugFlag: boolean; modelOptions?: Record<string, unknown> } {
+	if (!modelOptions || typeof modelOptions !== 'object') {
+		return { debugFlag: false, modelOptions: modelOptions as Record<string, unknown> | undefined };
+	}
+
+	const copy = { ...(modelOptions as Record<string, unknown>) };
+	const debugFlag = Boolean(copy.__opencodeDebugSelfTest);
+	delete copy.__opencodeDebugSelfTest;
+
+	return { debugFlag, modelOptions: Object.keys(copy).length > 0 ? copy : undefined };
+}
+
+function logDebugRequest(
+	model: vscode.LanguageModelChatInformation,
+	toolMode: 'required' | 'auto',
+	options: vscode.ProvideLanguageModelChatResponseOptions,
+	coreMessages: any[],
+	tools: Record<string, any> | undefined,
+	providerInfo: { npm: string; api: string } | undefined
+): void {
+	const output = getOutputChannel();
+	output.info('Debug: provider request payload');
+	output.info(`Model: ${model.name} (${model.id})`);
+	output.info(`Tool mode: ${toolMode}`);
+	output.info(`Tools enabled: ${tools ? Object.keys(tools).length : 0}`);
+	output.append(`\n${safeJson({
+		modelId: model.id,
+		messages: coreMessages,
+		tools,
+		toolMode,
+		modelOptions: options.modelOptions ?? undefined,
+		provider: providerInfo,
+	})}\n`);
+}
+
+function logDebugError(
+	model: vscode.LanguageModelChatInformation,
+	toolMode: 'required' | 'auto',
+	options: vscode.ProvideLanguageModelChatResponseOptions,
+	coreMessages: any[],
+	tools: Record<string, any> | undefined,
+	providerInfo: { npm: string; api: string } | undefined,
+	err: unknown
+): void {
+	const output = getOutputChannel();
+	output.error('Debug: provider error');
+	output.info(`Model: ${model.name} (${model.id})`);
+	output.info(`Tool mode: ${toolMode}`);
+	output.append(`\n${safeJson({
+		modelId: model.id,
+		messages: coreMessages,
+		tools,
+		toolMode,
+		modelOptions: options.modelOptions ?? undefined,
+		provider: providerInfo,
+		error: serializeError(err),
+	})}\n`);
+}
+
+function serializeError(err: unknown): unknown {
+	const seen = new Set<unknown>();
+
+	const toPlain = (value: unknown, depth: number): unknown => {
+		if (value === null || value === undefined) {
+			return value;
+		}
+		if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+			return value;
+		}
+		if (value instanceof Uint8Array) {
+			return Buffer.from(value).toString('utf-8');
+		}
+		if (typeof value !== 'object') {
+			return String(value);
+		}
+		if (seen.has(value)) {
+			return '[Circular]';
+		}
+		seen.add(value);
+		if (depth <= 0) {
+			return '[MaxDepth]';
+		}
+
+		const record = value as Record<string, unknown>;
+		const out: Record<string, unknown> = {};
+		for (const key of Object.getOwnPropertyNames(record)) {
+			out[key] = toPlain(record[key], depth - 1);
+		}
+		if ('cause' in record) {
+			out.cause = toPlain(record.cause, depth - 1);
+		}
+		return out;
+	};
+
+	return toPlain(err, 4);
+}
+
+function safeJson(value: unknown): string {
+	try {
+		return JSON.stringify(value, null, 2);
+	} catch {
+		return String(value);
+	}
 }
