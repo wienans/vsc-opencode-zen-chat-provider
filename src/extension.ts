@@ -6,12 +6,11 @@ import { clearApiKey, setApiKey } from './secrets';
 const SELF_TEST_TOOL_NAME = 'opencodeZen.selfTest.getTime';
 
 export function activate(context: vscode.ExtensionContext) {
-	const provider = new OpenCodeZenChatProvider(context);
 	const output = getOutputChannel();
+	const provider = new OpenCodeZenChatProvider(context);
 
 	context.subscriptions.push(
 		output,
-		vscode.lm.registerLanguageModelChatProvider(VENDOR_ID, provider),
 		vscode.commands.registerCommand('opencodeZen.setApiKey', async () => {
 			const key = await vscode.window.showInputBox({
 				prompt: 'Enter your OpenCode API key (OPENCODE_API_KEY)',
@@ -35,6 +34,12 @@ export function activate(context: vscode.ExtensionContext) {
 			vscode.window.showInformationMessage('OpenCode Zen model list refreshed.');
 		}),
 		vscode.commands.registerCommand('opencodeZen.selfTest', async () => {
+			if (!vscode.lm?.selectChatModels) {
+				output.error('VS Code Language Model API unavailable. Update VS Code to 1.104+.');
+				vscode.window.showWarningMessage('OpenCode Zen requires VS Code 1.104+ to run the self-test.');
+				return;
+			}
+
 			output.clear();
 			output.show(true);
 			output.info('Starting OpenCode Zen self-test...');
@@ -91,6 +96,20 @@ export function activate(context: vscode.ExtensionContext) {
 			}
 		})
 	);
+
+	try {
+		if (!vscode.lm?.registerLanguageModelChatProvider) {
+			output.error('VS Code Language Model API unavailable. Update VS Code to 1.104+.');
+			vscode.window.showWarningMessage('OpenCode Zen requires VS Code 1.104+ to provide models.');
+			return;
+		}
+		context.subscriptions.push(vscode.lm.registerLanguageModelChatProvider(VENDOR_ID, provider));
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		output.error(`OpenCode Zen activation failed: ${message}`);
+		vscode.window.showWarningMessage('OpenCode Zen failed to activate. Check the OpenCode Zen output channel for details.');
+		console.error(err);
+	}
 }
 
 interface SelfTestContext {

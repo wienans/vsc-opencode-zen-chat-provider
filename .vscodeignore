@@ -1,4 +1,4 @@
 **/*.ts
 .vscode/**
-node_modules/**
 out/**/*.map
+

@@ -3,7 +3,7 @@
   "publisher": "wienans",
   "displayName": "OpenCode Zen Provider",
   "description": "Provides OpenCode Zen models to VS Code's Language Model API.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "repository": {
     "type": "git",
     "url": "https://github.com/wienans/vsc-opencode-zen-chat-provider.git"
