@@ -249,13 +249,13 @@ function createProvider(
 function applyOpenAICompatibleCaching(args: Record<string, any>): Record<string, any> {
 	const modelId = typeof args.model === 'string' ? args.model.toLowerCase() : '';
 	const providerOptions = args?.provider_options?.[OPENAI_COMPAT_PROVIDER_NAME];
-	if (modelId.includes('glm-4.7')) {
-		if (
-			!args.prompt_cache_key &&
-			!args.prompt_cache_retention &&
-			!providerOptions?.prompt_cache_key &&
-			!providerOptions?.prompt_cache_retention
-		) {
+	const isGlm47 = modelId === 'glm-4.7' || modelId.endsWith('/glm-4.7');
+	if (isGlm47) {
+		const hasCacheKey =
+			args.prompt_cache_key !== undefined || providerOptions?.prompt_cache_key !== undefined;
+		const hasRetention =
+			args.prompt_cache_retention !== undefined || providerOptions?.prompt_cache_retention !== undefined;
+		if (!hasCacheKey && !hasRetention) {
 			return args;
 		}
 		const sanitizedProviderOptions =
