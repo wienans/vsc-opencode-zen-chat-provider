@@ -7,8 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## UNRELEASED [x.x.x] - xxxx-xx-xx
 
+## [0.1.3] - 2026-01-27
+
 ### Fixed
+
 - Filter out deprecated models flagged by models.dev status.
+- Update GLM 4.7 Handling to reduce error rate for unwanted fields
 
 ## [0.1.2] - 2026-01-19
 
