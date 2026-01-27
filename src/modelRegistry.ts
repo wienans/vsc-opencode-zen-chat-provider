@@ -14,6 +14,8 @@ export type ModelsDevModelProvider = {
 	npm?: string;
 };
 
+export type ModelsDevModelStatus = 'active' | 'beta' | 'deprecated';
+
 export type ModelsDevModel = {
 	id: string;
 	name: string;
@@ -30,7 +32,7 @@ export type ModelsDevModel = {
 	open_weights?: boolean;
 	cost?: { input?: number; output?: number; cache_read?: number };
 	limit?: { context?: number; output?: number };
-	status?: string;
+	status?: ModelsDevModelStatus;
 };
 
 const MODELS_DEV_URL = 'https://models.dev/api.json';
@@ -87,8 +89,9 @@ export class ModelRegistry {
 				.map((m) => [m.id, m.provider?.npm as string])
 		);
 
+		const isActiveModel = (model: ModelsDevModel) => model.status === undefined || model.status !== 'deprecated';
 		const models = Object.values(provider.models)
-			.filter((model) => model.status !== 'deprecated')
+			.filter(isActiveModel)
 			.sort((a, b) => a.name.localeCompare(b.name))
 			.map((m) => this.toChatInfo(provider, m));
 
