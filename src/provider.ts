@@ -78,7 +78,13 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 		if (promptCaching.enabled && anthropicCacheControl) {
 			cachedMessages = applyAnthropicCacheControl(coreMessages, anthropicCacheControl);
 		} else if (promptCaching.enabled && providerInfo?.npm === '@ai-sdk/openai-compatible') {
-			cachedMessages = applyOpenAICompatibleCacheControl(coreMessages);
+			if (isGlm47ModelId(model.id)) {
+				cachedMessages = removeOpenAICompatibleCacheControl(coreMessages);
+			} else {
+				cachedMessages = applyOpenAICompatibleCacheControl(coreMessages);
+			}
+		} else if (providerInfo?.npm === '@ai-sdk/openai-compatible') {
+			cachedMessages = removeOpenAICompatibleCacheControl(coreMessages);
 		}
 
 		const { debugFlag, modelOptions } = splitDebugOptions(options.modelOptions);
@@ -469,6 +475,38 @@ function applyOpenAICompatibleCacheControl(messages: any[]): any[] {
 			}),
 		};
 	});
+}
+
+function removeOpenAICompatibleCacheControl(messages: any[]): any[] {
+	if (!Array.isArray(messages) || messages.length === 0) {
+		return messages;
+	}
+
+	let changed = false;
+	const stripped = messages.map((message) => {
+		if (!message || typeof message !== 'object') {
+			return message;
+		}
+		const providerOptions = (message.providerOptions as Record<string, any> | undefined)?.openaiCompatible;
+		if (!providerOptions || providerOptions.cache_control === undefined) {
+			return message;
+		}
+		changed = true;
+		const merged = mergeProviderOptions(message.providerOptions, {
+			openaiCompatible: { cache_control: undefined },
+		});
+		return {
+			...message,
+			providerOptions: merged,
+		};
+	});
+
+	return changed ? stripped : messages;
+}
+
+function isGlm47ModelId(modelId: string): boolean {
+	const normalized = modelId.trim().toLowerCase();
+	return normalized === 'glm-4.7' || normalized.endsWith('/glm-4.7');
 }
 
 function applyCacheControlToMessages(messages: any[], updater: (message: any) => any): any[] {

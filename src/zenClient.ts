@@ -247,7 +247,38 @@ function createProvider(
 }
 
 function applyOpenAICompatibleCaching(args: Record<string, any>): Record<string, any> {
+	const modelId = typeof args.model === 'string' ? args.model.toLowerCase() : '';
 	const providerOptions = args?.provider_options?.[OPENAI_COMPAT_PROVIDER_NAME];
+	const isGlm47 = modelId === 'glm-4.7' || modelId.endsWith('/glm-4.7');
+	if (isGlm47) {
+		const hasCacheKey =
+			args.prompt_cache_key !== undefined || providerOptions?.prompt_cache_key !== undefined;
+		const hasRetention =
+			args.prompt_cache_retention !== undefined || providerOptions?.prompt_cache_retention !== undefined;
+		if (!hasCacheKey && !hasRetention) {
+			return args;
+		}
+		const sanitizedProviderOptions =
+			providerOptions && typeof providerOptions === 'object'
+				? {
+						...providerOptions,
+						prompt_cache_key: undefined,
+						prompt_cache_retention: undefined,
+					}
+				: providerOptions;
+		return {
+			...args,
+			prompt_cache_key: undefined,
+			prompt_cache_retention: undefined,
+			provider_options:
+				sanitizedProviderOptions && args.provider_options && typeof args.provider_options === 'object'
+					? {
+							...(args.provider_options as Record<string, any>),
+							[OPENAI_COMPAT_PROVIDER_NAME]: sanitizedProviderOptions,
+						}
+					: args.provider_options,
+		};
+	}
 	const cacheKey = args.prompt_cache_key ?? providerOptions?.prompt_cache_key;
 	const retention = args.prompt_cache_retention ?? providerOptions?.prompt_cache_retention;
 
