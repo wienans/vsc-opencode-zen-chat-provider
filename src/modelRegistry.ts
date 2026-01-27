@@ -30,6 +30,7 @@ export type ModelsDevModel = {
 	open_weights?: boolean;
 	cost?: { input?: number; output?: number; cache_read?: number };
 	limit?: { context?: number; output?: number };
+	status?: string;
 };
 
 const MODELS_DEV_URL = 'https://models.dev/api.json';
@@ -87,6 +88,7 @@ export class ModelRegistry {
 		);
 
 		const models = Object.values(provider.models)
+			.filter((model) => model.status !== 'deprecated')
 			.sort((a, b) => a.name.localeCompare(b.name))
 			.map((m) => this.toChatInfo(provider, m));
 
