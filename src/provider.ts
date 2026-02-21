@@ -650,19 +650,29 @@ function buildProviderOptions(
 	if (cacheKey && setCacheKey) {
 		if (providerNpm === '@ai-sdk/openai') {
 			result.promptCacheKey = cacheKey;
+			result.prompt_cache_key = cacheKey;
 			if (retention && retention !== 'in_memory') {
 				result.promptCacheRetention = retention;
+				result.prompt_cache_retention = retention;
 			}
 		} else if (providerNpm === '@ai-sdk/openai-compatible') {
 			result.prompt_cache_key = cacheKey;
+			result.promptCacheKey = cacheKey;
 			if (retention && retention !== 'in_memory') {
 				result.prompt_cache_retention = retention;
+				result.promptCacheRetention = retention;
 			}
 		}
 	}
 
 	const providerKey = providerOptionsKey(providerNpm);
-	if (providerKey) {
+	if (providerNpm === '@ai-sdk/openai-compatible') {
+		const namedCurrent = (merged[OPENAI_COMPAT_PROVIDER_NAME] as Record<string, unknown> | undefined) ?? {};
+		merged[OPENAI_COMPAT_PROVIDER_NAME] = { ...namedCurrent, ...result };
+
+		const genericCurrent = (merged.openaiCompatible as Record<string, unknown> | undefined) ?? {};
+		merged.openaiCompatible = { ...genericCurrent, ...result };
+	} else if (providerKey) {
 		const current = (merged[providerKey] as Record<string, unknown> | undefined) ?? {};
 		merged[providerKey] = { ...current, ...result };
 	}

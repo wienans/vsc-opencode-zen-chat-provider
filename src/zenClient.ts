@@ -101,7 +101,7 @@ function normalizeToString(value: unknown): string {
 	}
 }
 
-export const OPENAI_COMPAT_PROVIDER_NAME = 'opencode-zen';
+export const OPENAI_COMPAT_PROVIDER_NAME = 'opencode';
 
 export async function streamZen(
 	options: {
@@ -235,7 +235,11 @@ function createProvider(
 				fetch: debugLogging ? createDebugFetch() : undefined,
 			}) as any;
 		case '@ai-sdk/openai':
-			return createOpenAI({ apiKey, baseURL, fetch: debugLogging ? createDebugFetch() : undefined }) as any;
+			return createOpenAI({
+				apiKey,
+				baseURL,
+				fetch: debugLogging ? createDebugFetch() : undefined,
+			}) as any;
 		case '@ai-sdk/google':
 			return createGoogleGenerativeAI({
 				apiKey,
@@ -257,7 +261,7 @@ function createProvider(
 
 function applyOpenAICompatibleCaching(args: Record<string, any>): Record<string, any> {
 	const modelId = typeof args.model === 'string' ? args.model.toLowerCase() : '';
-	const providerOptions = args?.provider_options?.[OPENAI_COMPAT_PROVIDER_NAME];
+	const providerOptions = extractCompatibleProviderOptions(args);
 	const isGlm47 = modelId === 'glm-4.7' || modelId.endsWith('/glm-4.7');
 	if (isGlm47) {
 		const hasCacheKey =
@@ -300,6 +304,30 @@ function applyOpenAICompatibleCaching(args: Record<string, any>): Record<string,
 		prompt_cache_key: cacheKey ?? args.prompt_cache_key,
 		prompt_cache_retention: retention ?? args.prompt_cache_retention,
 	};
+}
+
+function extractCompatibleProviderOptions(args: Record<string, any>): Record<string, any> | undefined {
+	const snake = args?.provider_options;
+	const camel = args?.providerOptions;
+
+	const candidates = [
+		snake?.[OPENAI_COMPAT_PROVIDER_NAME],
+		snake?.openaiCompatible,
+		snake?.opencode,
+		snake?.['opencode-zen'],
+		camel?.[OPENAI_COMPAT_PROVIDER_NAME],
+		camel?.openaiCompatible,
+		camel?.opencode,
+		camel?.['opencode-zen'],
+	];
+
+	for (const candidate of candidates) {
+		if (candidate && typeof candidate === 'object') {
+			return candidate as Record<string, any>;
+		}
+	}
+
+	return undefined;
 }
 
 function extractCachedTokens(usage: any): { read?: number; write?: number; cached?: number } | undefined {
