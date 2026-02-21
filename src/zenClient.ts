@@ -1,4 +1,5 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createOpenAI } from '@ai-sdk/openai';
 import { streamText, type ModelMessage } from 'ai';
@@ -235,6 +236,12 @@ function createProvider(
 			}) as any;
 		case '@ai-sdk/openai':
 			return createOpenAI({ apiKey, baseURL, fetch: debugLogging ? createDebugFetch() : undefined }) as any;
+		case '@ai-sdk/google':
+			return createGoogleGenerativeAI({
+				apiKey,
+				baseURL,
+				fetch: debugLogging ? createDebugFetch() : undefined,
+			}) as any;
 		case '@ai-sdk/openai-compatible':
 		default:
 			return createOpenAICompatible({
@@ -317,6 +324,9 @@ function getEndpointPath(providerNpm: string): string {
 	}
 	if (providerNpm === '@ai-sdk/openai') {
 		return '/responses';
+	}
+	if (providerNpm === '@ai-sdk/google') {
+		return '/v1beta/models';
 	}
 	return '/chat/completions';
 }
