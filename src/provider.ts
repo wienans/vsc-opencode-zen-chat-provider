@@ -37,11 +37,15 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 		_options: vscode.PrepareLanguageModelChatModelOptions,
 		_token: vscode.CancellationToken
 	): vscode.ProviderResult<vscode.LanguageModelChatInformation[]> {
-		return this.registry.getModels().catch((err) => {
+		void _options;
+		void _token;
+		return getApiKey(this.context.secrets)
+			.then((apiKey) => this.registry.getModels({ hasKey: Boolean(apiKey && apiKey.trim()) }))
+			.catch((err) => {
 			// If model metadata fetch fails, surface no models rather than throwing.
 			console.error(err);
 			return [];
-		});
+			});
 	}
 
 	async provideLanguageModelChatResponse(
@@ -51,23 +55,22 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 		progress: vscode.Progress<vscode.LanguageModelResponsePart>,
 		token: vscode.CancellationToken
 	): Promise<void> {
-		const apiKey = await getApiKey(this.context.secrets);
-		if (!apiKey) {
-			throw new Error("OpenCode Zen API key not set. Run 'OpenCode Zen: Set API Key'.");
-		}
+		const storedApiKey = await getApiKey(this.context.secrets);
+		const apiKey = storedApiKey?.trim() ? storedApiKey : 'public';
 
 		const abortController = new AbortController();
 		token.onCancellationRequested(() => abortController.abort());
 
 		const toolMode = options.toolMode === vscode.LanguageModelChatToolMode.Required ? 'required' : 'auto';
 		const providerInfo = await this.registry.getModelProviderInfo(model.id);
+		const requestMeta = await getOrCreateRequestMetadata(this.context, options);
 		const toolNameMap = buildToolNameMap(options.tools, providerInfo?.npm);
 		const tools = options.tools ? toolsToAiSdkTools(options.tools, toolNameMap.toProvider) : undefined;
 		const coreMessages = messagesToAiSdkMessages(messages, toolNameMap.toProvider);
 		const promptCaching = getPromptCachingConfig();
 		const promptCacheKey =
 			promptCaching.enabled && promptCaching.cacheKeyScope !== 'none'
-				? await getOrCreatePromptCacheKey(this.context, promptCaching.cacheKeyScope)
+				? requestMeta.sessionId
 				: undefined;
 		const cacheRetention = promptCaching.enabled ? promptCaching.retention : undefined;
 		const anthropicCacheControl =
@@ -88,7 +91,15 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 		}
 
 		const { debugFlag, modelOptions } = splitDebugOptions(options.modelOptions);
-		const providerOptions = buildProviderOptions(modelOptions, providerInfo?.npm, promptCacheKey, cacheRetention);
+		const providerOptions = buildProviderOptions(
+			modelOptions,
+			providerInfo?.npm,
+			promptCacheKey,
+			cacheRetention,
+			model.id,
+			providerInfo?.options
+		);
+		const requestHeaders = buildRequestHeaders(requestMeta, providerInfo?.headers);
 
 		if (debugFlag) {
 			logDebugRequest(model, toolMode, options, coreMessages, tools, providerInfo, providerOptions);
@@ -106,6 +117,7 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 					providerOptions,
 					providerNpm: providerInfo?.npm,
 					baseURL: providerInfo?.api,
+					headers: requestHeaders,
 					toolNameMap: toolNameMap.toVsCode,
 					debugLogging: debugFlag,
 					includeUsage: promptCaching.enabled,
@@ -134,6 +146,8 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 		text: string | vscode.LanguageModelChatRequestMessage,
 		_token: vscode.CancellationToken
 	): Promise<number> {
+		void _model;
+		void _token;
 		// VS Code uses this for planning/truncation. We provide a rough estimate.
 		const serialized = typeof text === 'string' ? text : JSON.stringify(text.content);
 		return Math.max(1, Math.ceil(serialized.length / 4));
@@ -410,6 +424,13 @@ type PromptCachingConfig = {
 	anthropicTtl: '5m' | '1h' | 'none';
 };
 
+type RequestMetadata = {
+	projectId: string;
+	sessionId: string;
+	requestId: string;
+	client: string;
+};
+
 function getPromptCachingConfig(): PromptCachingConfig {
 	const config = vscode.workspace.getConfiguration('opencodeZen');
 	return {
@@ -420,18 +441,59 @@ function getPromptCachingConfig(): PromptCachingConfig {
 	};
 }
 
-async function getOrCreatePromptCacheKey(
+async function getOrCreateRequestMetadata(
 	context: vscode.ExtensionContext,
-	scope: 'workspace' | 'global'
-): Promise<string> {
-	const storage = scope === 'global' ? context.globalState : context.workspaceState;
-	const keyName = 'opencodeZen.promptCacheKey';
-	let key = storage.get<string>(keyName);
-	if (!key) {
-		key = randomUUID();
-		await storage.update(keyName, key);
+	options: vscode.ProvideLanguageModelChatResponseOptions
+): Promise<RequestMetadata> {
+	const sessionStorageKey = 'opencodeZen.requestSessionId';
+	let sessionId = context.workspaceState.get<string>(sessionStorageKey);
+	if (!sessionId) {
+		sessionId = randomUUID();
+		await context.workspaceState.update(sessionStorageKey, sessionId);
 	}
-	return key;
+
+	const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+	const projectId = workspaceFolder?.name || 'default';
+	const requestId = randomUUID();
+	const client = `vscode-opencode-zen/${context.extension.packageJSON.version}`;
+
+	const overriddenSessionId = tryGetModelOptionString(options.modelOptions, 'sessionID')
+		?? tryGetModelOptionString(options.modelOptions, 'sessionId');
+
+	return {
+		projectId,
+		sessionId: overriddenSessionId ?? sessionId,
+		requestId,
+		client,
+	};
+}
+
+function tryGetModelOptionString(
+	modelOptions: vscode.ProvideLanguageModelChatResponseOptions['modelOptions'] | undefined,
+	key: string
+): string | undefined {
+	if (!modelOptions || typeof modelOptions !== 'object') {
+		return undefined;
+	}
+	const value = (modelOptions as Record<string, unknown>)[key];
+	if (typeof value !== 'string') {
+		return undefined;
+	}
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function buildRequestHeaders(
+	meta: RequestMetadata,
+	modelHeaders: Record<string, string> | undefined
+): Record<string, string> {
+	return {
+		'x-opencode-project': meta.projectId,
+		'x-opencode-session': meta.sessionId,
+		'x-opencode-request': meta.requestId,
+		'x-opencode-client': meta.client,
+		...(modelHeaders ?? {}),
+	};
 }
 
 function buildAnthropicCacheControl(ttl: '5m' | '1h' | 'none'): { type: 'ephemeral'; ttl?: '5m' | '1h' } {
@@ -545,35 +607,87 @@ function buildProviderOptions(
 	modelOptions: Record<string, unknown> | undefined,
 	providerNpm: string | undefined,
 	cacheKey: string | undefined,
-	retention: 'in_memory' | '24h' | undefined
+	retention: 'in_memory' | '24h' | undefined,
+	modelId: string,
+	modelDefaults: Record<string, unknown> | undefined
 ): Record<string, unknown> | undefined {
-	if (!cacheKey) {
-		return modelOptions;
-	}
-
 	const merged = modelOptions ? { ...modelOptions } : {};
+	const normalizedModelId = modelId.toLowerCase();
+	const result: Record<string, unknown> = modelDefaults ? { ...modelDefaults } : {};
 
 	if (providerNpm === '@ai-sdk/openai') {
-		const openai = { ...(merged.openai as Record<string, unknown> | undefined) };
-		openai.promptCacheKey = cacheKey;
-		if (retention && retention !== 'in_memory') {
-			openai.promptCacheRetention = retention;
-		}
-		merged.openai = openai;
-		return merged;
+		result.store = false;
 	}
 
-	if (providerNpm === '@ai-sdk/openai-compatible') {
-		const compatible = { ...(merged[OPENAI_COMPAT_PROVIDER_NAME] as Record<string, unknown> | undefined) };
-		compatible.prompt_cache_key = cacheKey;
-		if (retention && retention !== 'in_memory') {
-			compatible.prompt_cache_retention = retention;
+	if (providerNpm === '@ai-sdk/google') {
+		result.thinkingConfig = {
+			includeThoughts: true,
+			...(normalizedModelId.includes('gemini-3') ? { thinkingLevel: 'high' } : {}),
+		};
+	}
+
+	if (providerNpm === '@ai-sdk/anthropic' && isKimiK25(normalizedModelId)) {
+		result.thinking = {
+			type: 'enabled',
+			budgetTokens: 16_000,
+		};
+	}
+
+	if (normalizedModelId.includes('gpt-5') && !normalizedModelId.includes('gpt-5-chat')) {
+		if (!normalizedModelId.includes('gpt-5-pro')) {
+			result.reasoningEffort = 'medium';
+			result.reasoningSummary = 'auto';
 		}
-		merged[OPENAI_COMPAT_PROVIDER_NAME] = compatible;
-		return merged;
+		if (normalizedModelId.includes('gpt-5.') && !normalizedModelId.includes('codex') && !normalizedModelId.includes('-chat')) {
+			result.textVerbosity = 'low';
+		}
+		result.include = ['reasoning.encrypted_content'];
+	}
+
+	const setCacheKey = (merged.setCacheKey as boolean | undefined) ?? true;
+	delete merged.setCacheKey;
+
+	if (cacheKey && setCacheKey) {
+		if (providerNpm === '@ai-sdk/openai') {
+			result.promptCacheKey = cacheKey;
+			if (retention && retention !== 'in_memory') {
+				result.promptCacheRetention = retention;
+			}
+		} else if (providerNpm === '@ai-sdk/openai-compatible') {
+			result.prompt_cache_key = cacheKey;
+			if (retention && retention !== 'in_memory') {
+				result.prompt_cache_retention = retention;
+			}
+		}
+	}
+
+	const providerKey = providerOptionsKey(providerNpm);
+	if (providerKey) {
+		const current = (merged[providerKey] as Record<string, unknown> | undefined) ?? {};
+		merged[providerKey] = { ...current, ...result };
 	}
 
 	return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function providerOptionsKey(providerNpm: string | undefined): string | undefined {
+	if (providerNpm === '@ai-sdk/openai') {
+		return 'openai';
+	}
+	if (providerNpm === '@ai-sdk/anthropic') {
+		return 'anthropic';
+	}
+	if (providerNpm === '@ai-sdk/google') {
+		return 'google';
+	}
+	if (providerNpm === '@ai-sdk/openai-compatible') {
+		return OPENAI_COMPAT_PROVIDER_NAME;
+	}
+	return undefined;
+}
+
+function isKimiK25(modelId: string): boolean {
+	return modelId.includes('k2p5') || modelId.includes('kimi-k2.5') || modelId.includes('kimi-k2p5');
 }
 
 function mergeProviderOptions(

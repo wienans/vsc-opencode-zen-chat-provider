@@ -18,9 +18,9 @@ npm run lint
 
 ```
 
-**Debugging in VS Code:**
-1. Open folder in VS Code
-2. Press `F5` to launch Extension Development Host
+## Additional Context / Projects
+
+- in the .context Folder you can find the opencode Project. Use it when ever reference is needed.
 
 ## Code Style Guidelines
 

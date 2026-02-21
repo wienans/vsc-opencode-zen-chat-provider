@@ -110,6 +110,7 @@ export async function streamZen(
 		tools?: Record<string, any>;
 		toolMode: ToolMode;
 		abortSignal: AbortSignal;
+		headers?: Record<string, string>;
 		providerOptions?: Record<string, any>;
 		debugLogging?: boolean;
 		providerNpm?: string;
@@ -137,6 +138,7 @@ export async function streamZen(
 	const result = streamText({
 		model: provider(options.modelId),
 		messages: options.messages,
+		headers: options.headers,
 		tools: options.tools,
 		toolChoice: options.tools ? options.toolMode : undefined,
 		abortSignal: options.abortSignal,

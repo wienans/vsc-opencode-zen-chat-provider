@@ -57,3 +57,4 @@ Open the command palette (`Ctrl/Cmd+Shift+P`):
 
 - Tool calling is supported by streaming `LanguageModelToolCallPart` from the provider.
 - Tool execution is handled by the caller (VS Code) by sending back `LanguageModelToolResultPart` on the next request.
+- If no API key is configured, requests use `apiKey: public` and only free OpenCode Zen models are shown (matching opencode behavior).

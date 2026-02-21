@@ -24,6 +24,8 @@ export type ModelsDevModel = {
 	reasoning: boolean;
 	tool_call: boolean;
 	temperature: boolean;
+	headers?: Record<string, string>;
+	options?: Record<string, unknown>;
 	provider?: ModelsDevModelProvider;
 	knowledge?: string;
 	release_date?: string;
@@ -46,6 +48,7 @@ export class ModelRegistry {
 	private cachedModels: vscode.LanguageModelChatInformation[] | undefined;
 	private providerDefaults: { npm: string; api: string } | undefined;
 	private modelProviderOverrides = new Map<string, string>();
+	private modelRequestMetadata = new Map<string, { headers?: Record<string, string>; options?: Record<string, unknown> }>();
 
 	constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -54,12 +57,13 @@ export class ModelRegistry {
 		this.cachedModels = undefined;
 		this.providerDefaults = undefined;
 		this.modelProviderOverrides.clear();
+		this.modelRequestMetadata.clear();
 		this._onDidChange.fire();
 	}
 
-	async getModels(options: { force?: boolean } = {}): Promise<vscode.LanguageModelChatInformation[]> {
+	async getModels(options: { force?: boolean; hasKey?: boolean } = {}): Promise<vscode.LanguageModelChatInformation[]> {
 		const ttlMinutes = this.context.workspaceState.get<number>('opencodeZen.modelCacheTtlMinutes.override')
-			?? vscode.workspace.getConfiguration('opencodeZen').get<number>('modelCacheTtlMinutes', 15);
+			?? vscode.workspace.getConfiguration('opencodeZen').get<number>('modelCacheTtlMinutes', 60);
 
 		const ttlMs = Math.max(0, ttlMinutes) * 60_000;
 		const now = Date.now();
@@ -90,17 +94,29 @@ export class ModelRegistry {
 		);
 
 		const isActiveModel = (model: ModelsDevModel) => model.status === undefined || model.status !== 'deprecated';
+		const hasKey = options.hasKey ?? true;
 		const models = Object.values(provider.models)
 			.filter(isActiveModel)
+			.filter((m) => hasKey || m.cost?.input === 0)
 			.sort((a, b) => a.name.localeCompare(b.name))
 			.map((m) => this.toChatInfo(provider, m));
+
+		this.modelRequestMetadata = new Map(
+			Object.values(provider.models).map((m) => [
+				m.id,
+				{
+					headers: m.headers,
+					options: m.options,
+				},
+			])
+		);
 
 		this.cachedModels = models;
 		this.cachedAtMs = now;
 		return models;
 	}
 
-	async getModelProviderInfo(modelId: string): Promise<{ npm: string; api: string } | undefined> {
+	async getModelProviderInfo(modelId: string): Promise<{ npm: string; api: string; headers?: Record<string, string>; options?: Record<string, unknown> } | undefined> {
 		if (!this.providerDefaults || !this.cachedModels) {
 			await this.getModels();
 		}
@@ -110,9 +126,12 @@ export class ModelRegistry {
 		}
 
 		const override = this.modelProviderOverrides.get(modelId);
+		const metadata = this.modelRequestMetadata.get(modelId);
 		return {
 			npm: override ?? this.providerDefaults.npm,
 			api: this.providerDefaults.api,
+			headers: metadata?.headers,
+			options: metadata?.options,
 		};
 	}
 

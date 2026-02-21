@@ -65,7 +65,7 @@
       "properties": {
         "opencodeZen.modelCacheTtlMinutes": {
           "type": "number",
-          "default": 15,
+          "default": 60,
           "minimum": 0,
           "description": "How long to cache models.dev model metadata before refetching. 0 disables caching."
         },
