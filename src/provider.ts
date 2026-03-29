@@ -62,7 +62,9 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 		token.onCancellationRequested(() => abortController.abort());
 
 		const toolMode = options.toolMode === vscode.LanguageModelChatToolMode.Required ? 'required' : 'auto';
+		const requestToolMode = model.id.endsWith('-go') && toolMode === 'required' ? 'auto' : toolMode;
 		const providerInfo = await this.registry.getModelProviderInfo(model.id);
+		const requestModelId = providerInfo?.originalModelId ?? model.id;
 		const requestMeta = await getOrCreateRequestMetadata(this.context, options);
 		const toolNameMap = buildToolNameMap(options.tools, providerInfo?.npm);
 		const tools = options.tools ? toolsToAiSdkTools(options.tools, toolNameMap.toProvider) : undefined;
@@ -102,17 +104,17 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 		const requestHeaders = buildRequestHeaders(requestMeta, providerInfo?.headers);
 
 		if (debugFlag) {
-			logDebugRequest(model, toolMode, options, coreMessages, tools, providerInfo, providerOptions);
+			logDebugRequest(model, requestModelId, requestToolMode, options, coreMessages, tools, providerInfo, providerOptions);
 		}
 
 		try {
 			await streamZen(
 				{
 					apiKey,
-					modelId: model.id,
+					modelId: requestModelId,
 					messages: cachedMessages,
 					tools,
-					toolMode,
+					toolMode: requestToolMode,
 					abortSignal: abortController.signal,
 					providerOptions,
 					providerNpm: providerInfo?.npm,
@@ -135,7 +137,7 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 			);
 		} catch (err) {
 			if (debugFlag) {
-				logDebugError(model, toolMode, options, coreMessages, tools, providerInfo, err);
+				logDebugError(model, requestModelId, requestToolMode, options, coreMessages, tools, providerInfo, err);
 			}
 			throw err;
 		}
@@ -389,7 +391,7 @@ function buildToolNameMap(
 		return { toProvider, toVsCode };
 	}
 
-	const needsSanitize = providerNpm === '@ai-sdk/anthropic' || providerNpm === '@ai-sdk/openai';
+	const needsSanitize = providerNpm === '@ai-sdk/anthropic' || providerNpm === '@ai-sdk/openai' || providerNpm === '@ai-sdk/openai-compatible';
 	const used = new Set<string>();
 
 	for (const tool of tools) {
@@ -736,7 +738,8 @@ function splitDebugOptions(
 
 function logDebugRequest(
 	model: vscode.LanguageModelChatInformation,
-	toolMode: 'required' | 'auto',
+	requestModelId: string,
+	requestToolMode: 'required' | 'auto',
 	options: vscode.ProvideLanguageModelChatResponseOptions,
 	coreMessages: any[],
 	tools: Record<string, any> | undefined,
@@ -746,13 +749,14 @@ function logDebugRequest(
 	const output = getOutputChannel();
 	output.info('Debug: provider request payload');
 	output.info(`Model: ${model.name} (${model.id})`);
-	output.info(`Tool mode: ${toolMode}`);
+	output.info(`Request Model ID: ${requestModelId}`);
+	output.info(`Request Tool mode: ${requestToolMode}`);
 	output.info(`Tools enabled: ${tools ? Object.keys(tools).length : 0}`);
 	output.append(`\n${safeJson({
-		modelId: model.id,
+		modelId: requestModelId,
 		messages: coreMessages,
 		tools,
-		toolMode,
+		toolMode: requestToolMode,
 		providerOptions: providerOptions ?? options.modelOptions ?? undefined,
 		provider: providerInfo,
 	})}\n`);
@@ -760,7 +764,8 @@ function logDebugRequest(
 
 function logDebugError(
 	model: vscode.LanguageModelChatInformation,
-	toolMode: 'required' | 'auto',
+	requestModelId: string,
+	requestToolMode: 'required' | 'auto',
 	options: vscode.ProvideLanguageModelChatResponseOptions,
 	coreMessages: any[],
 	tools: Record<string, any> | undefined,
@@ -770,12 +775,13 @@ function logDebugError(
 	const output = getOutputChannel();
 	output.error('Debug: provider error');
 	output.info(`Model: ${model.name} (${model.id})`);
-	output.info(`Tool mode: ${toolMode}`);
+	output.info(`Request Model ID: ${requestModelId}`);
+	output.info(`Request Tool mode: ${requestToolMode}`);
 	output.append(`\n${safeJson({
-		modelId: model.id,
+		modelId: requestModelId,
 		messages: coreMessages,
 		tools,
-		toolMode,
+		toolMode: requestToolMode,
 		modelOptions: options.modelOptions ?? undefined,
 		provider: providerInfo,
 		error: serializeError(err),
