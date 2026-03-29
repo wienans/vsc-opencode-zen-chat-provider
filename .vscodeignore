@@ -1,4 +1,15 @@
 **/*.ts
 .vscode/**
+.git/**
+.gitignore
+.context/**
+src/**
+AGENTS.md
+PRD.md
+eslint.config.mjs
+tsconfig.json
+package-lock.json
+*.vsix
+node_modules/.bin/**
 out/**/*.map
 
