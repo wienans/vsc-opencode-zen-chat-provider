@@ -1,8 +1,8 @@
 {
   "name": "opencode-zen-chat-provider",
   "publisher": "wienans",
-  "displayName": "OpenCode Zen Provider",
-  "description": "Provides OpenCode Zen models to VS Code's Language Model API.",
+  "displayName": "OpenCode Zen & Go Provider",
+  "description": "Provides OpenCode Zen and OpenCode Go models to VS Code's Language Model API.",
   "version": "0.1.4",
   "repository": {
     "type": "git",
@@ -24,7 +24,8 @@
     "coding",
     "assistant",
     "chat provider",
-    "opencode"
+    "opencode",
+    "opencode-go"
   ],
   "icon": "assets/icon.png",
   "main": "./out/extension.js",

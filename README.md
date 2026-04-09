@@ -3,13 +3,13 @@
 > **Disclaimer:** This project is a community project and is not maintained by the OpenCode team (https://opencode.ai/) and has no ties to the OpenCode team.
 
 
-This extension provides **OpenCode Zen** models to VS Code via the **Language Model Chat Provider** API (vendor id: `opencode`).
+This extension provides **OpenCode Zen** and **[OpenCode Go](https://opencode.ai/go)** models to VS Code via the **Language Model Chat Provider** API (vendor id: `opencode`).
 
 ## Prerequisites
 
 - VS Code `^1.104`
 - Node.js (recent LTS recommended)
-- An OpenCode API key (`OPENCODE_API_KEY`)
+- An OpenCode API key (`OPENCODE_API_KEY`) — works for both Zen and Go catalogs
 
 ## Install
 
@@ -48,7 +48,7 @@ Open the command palette (`Ctrl/Cmd+Shift+P`):
   - Stores the key in **SecretStorage** (not in settings).
 - `OpenCode Zen: Clear API Key` (`opencodeZen.clearApiKey`)
 - `OpenCode Zen: Refresh Model List` (`opencodeZen.refreshModels`)
-  - Refetches models from `https://models.dev/api.json` (filtered to provider `opencode`).
+  - Refetches models from `https://models.dev/api.json` (filtered to providers `opencode` and `opencode-go`).
 - `OpenCode Zen: Self Test` (`opencodeZen.selfTest`)
   - Prompts for a model, then runs a small tool-calling roundtrip.
   - Output is written to the **OpenCode Zen** Output Channel.
@@ -58,3 +58,7 @@ Open the command palette (`Ctrl/Cmd+Shift+P`):
 - Tool calling is supported by streaming `LanguageModelToolCallPart` from the provider.
 - Tool execution is handled by the caller (VS Code) by sending back `LanguageModelToolResultPart` on the next request.
 - If no API key is configured, requests use `apiKey: public` and only free OpenCode Zen models are shown (matching opencode behavior).
+
+## OpenCode Go
+
+Models from [OpenCode Go](https://opencode.ai/go) appear with a **(Go)** suffix in the VS Code model picker (e.g. `Kimi K2.5 (Go)`). Requests to Go models are automatically routed to the Go API endpoint (`https://opencode.ai/zen/go/v1`). The same API key covers both Zen and Go.

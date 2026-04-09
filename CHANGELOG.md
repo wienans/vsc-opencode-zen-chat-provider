@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## UNRELEASED [x.x.x] - xxxx-xx-xx
 
+## [0.1.4] - 2026-03-29
+
+### Added
+
+- **OpenCode Go support** — Extension now fetches and serves models from the [OpenCode Go](https://opencode.ai/go) subscription tier alongside OpenCode Zen.
+- OpenCode Go models are listed with a "(Go)" suffix in the model picker for easy identification.
+- Go model IDs are suffixed with `-go` internally to avoid collisions with Zen models sharing the same name (e.g. `kimi-k2.5` vs `kimi-k2.5-go`).
+- Requests to Go models automatically route to the `https://opencode.ai/zen/go/v1` API endpoint.
+- Single API key (`OPENCODE_API_KEY`) works for both Zen and Go catalogs.
+
 ## [0.1.3] - 2026-01-27
 
 ### Fixed
