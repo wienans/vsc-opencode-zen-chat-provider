@@ -8,6 +8,52 @@ import { getOutputChannel } from './output';
 
 export const VENDOR_ID = 'opencode';
 
+const REASONING_CONTENT_MIME = 'application/vnd.opencode-zen.reasoning-content';
+
+// VS Code may not preserve custom LanguageModelDataPart objects on assistant
+// messages that contain only a tool call. DeepSeek emits reasoning before the
+// tool call, so keep a local fallback keyed by the tool call id and restore it
+// when VS Code sends the next request with that tool call in the conversation.
+const reasoningContentByToolCallId = new Map<string, string>();
+
+function rememberReasoningContentForToolCall(toolCallId: string, reasoningContent: string): void {
+	const trimmed = reasoningContent.trim();
+	if (!toolCallId || trimmed.length === 0) {
+		return;
+	}
+
+	reasoningContentByToolCallId.set(toolCallId, reasoningContent);
+}
+
+function readReasoningContentForToolCall(toolCallId: string): string | undefined {
+	const value = reasoningContentByToolCallId.get(toolCallId);
+	if (value && value.trim().length > 0) {
+		return value;
+	}
+
+	return undefined;
+}
+
+
+function createReasoningContentPart(text: string): vscode.LanguageModelDataPart {
+	return new vscode.LanguageModelDataPart(
+		new TextEncoder().encode(text),
+		REASONING_CONTENT_MIME
+	);
+}
+
+function readReasoningContentPart(part: vscode.LanguageModelDataPart): string | undefined {
+	if (part.mimeType !== REASONING_CONTENT_MIME) {
+		return undefined;
+	}
+
+	try {
+		return new TextDecoder().decode(part.data);
+	} catch {
+		return undefined;
+	}
+}
+
 export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider {
 	private readonly registry: ModelRegistry;
 	private readonly onDidChangeEmitter = new vscode.EventEmitter<void>();
@@ -107,6 +153,8 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 			logDebugRequest(model, requestModelId, requestToolMode, options, coreMessages, tools, providerInfo, providerOptions);
 		}
 
+		const reasoningDeltas: string[] = [];
+
 		try {
 			await streamZen(
 				{
@@ -125,16 +173,31 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 					includeUsage: promptCaching.enabled,
 				},
 				{
-					onTextDelta: (delta) => {
+					onTextDelta: (delta: string) => {
 						if (delta) {
 							progress.report(new vscode.LanguageModelTextPart(delta));
 						}
 					},
-					onToolCall: ({ toolCallId, toolName, input }) => {
+					onReasoningDelta: (delta: string) => {
+						if (delta) {
+							reasoningDeltas.push(delta);
+						}
+					},
+					onToolCall: ({ toolCallId, toolName, input }: { toolCallId: string; toolName: string; input: object }) => {
+						// DeepSeek emits reasoning before a tool call. Store it by toolCallId
+						// because VS Code may not preserve custom LanguageModelDataPart
+						// objects on assistant messages that only contain tool calls.
+						rememberReasoningContentForToolCall(toolCallId, reasoningDeltas.join(''));
+
 						progress.report(new vscode.LanguageModelToolCallPart(toolCallId, toolName, input));
 					},
-				}
+				} as any
 			);
+
+			const reasoningContent = reasoningDeltas.join('');
+			if (reasoningContent.trim().length > 0) {
+				progress.report(createReasoningContentPart(reasoningContent));
+			}
 		} catch (err) {
 			if (debugFlag) {
 				logDebugError(model, requestModelId, requestToolMode, options, coreMessages, tools, providerInfo, err);
@@ -191,6 +254,7 @@ function mapVsCodeMessageToAiSdkMessages(
 	const textImageFileParts: any[] = [];
 	const toolResultParts: any[] = [];
 	const assistantParts: any[] = [];
+	let reasoningContent = '';
 
 	for (const part of message.content) {
 		if (part instanceof vscode.LanguageModelTextPart) {
@@ -205,6 +269,11 @@ function mapVsCodeMessageToAiSdkMessages(
 
 		if (part instanceof vscode.LanguageModelToolCallPart) {
 			// Assistant-only in VS Code input, but we handle defensively.
+			const storedReasoning = readReasoningContentForToolCall(part.callId);
+			if (storedReasoning) {
+				reasoningContent += storedReasoning;
+			}
+
 			assistantParts.push({
 				type: 'tool-call',
 				toolCallId: part.callId,
@@ -226,6 +295,14 @@ function mapVsCodeMessageToAiSdkMessages(
 		}
 
 		if (part instanceof vscode.LanguageModelDataPart) {
+			const storedReasoning = readReasoningContentPart(part);
+			if (storedReasoning !== undefined) {
+				if (!isUser) {
+					reasoningContent += storedReasoning;
+				}
+				continue;
+			}
+
 			const converted = dataPartToAiSdkPart(part);
 			if (!converted) {
 				continue;
@@ -252,7 +329,16 @@ function mapVsCodeMessageToAiSdkMessages(
 			out.push({ role: 'tool', content: toolResultParts });
 		}
 	} else {
-		out.push({ role: 'assistant', content: simplifyTextOnlyContent(assistantParts) });
+		const assistantMessage: any = {
+			role: 'assistant',
+			content: simplifyTextOnlyContent(assistantParts),
+		};
+
+		if (reasoningContent.trim().length > 0) {
+			assistantMessage.reasoning_content = reasoningContent;
+		}
+
+		out.push(assistantMessage);
 	}
 
 	return out;
@@ -271,7 +357,7 @@ function simplifyTextOnlyContent(parts: any[]): any {
 
 function dataPartToAiSdkPart(part: vscode.LanguageModelDataPart): any | undefined {
 	// VS Code may include internal metadata such as cache_control in Agent/Plan mode.
-	if (part.mimeType === 'cache_control') {
+	if (part.mimeType === 'cache_control' || part.mimeType === REASONING_CONTENT_MIME) {
 		return undefined;
 	}
 

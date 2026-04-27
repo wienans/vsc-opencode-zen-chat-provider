@@ -10,8 +10,9 @@ export const ZEN_BASE_URL = 'https://opencode.ai/zen/v1';
 export type ToolMode = 'auto' | 'required';
 
 export type StreamCallbacks = {
-	onTextDelta: (delta: string) => void;
-	onToolCall: (args: { toolCallId: string; toolName: string; input: object }) => void;
+  onTextDelta: (delta: string) => void;
+  onReasoningDelta?: (delta: string) => void;
+  onToolCall: (args: { toolCallId: string; toolName: string; input: object }) => void;
 };
 
 type ApiErrorDetails = {
@@ -132,7 +133,8 @@ export async function streamZen(
 		options.apiKey,
 		baseURL,
 		options.debugLogging,
-		options.includeUsage
+		options.includeUsage,
+		options.messages
 	);
 	const endpointPath = getEndpointPath(providerNpm);
 
@@ -183,7 +185,12 @@ export async function streamZen(
 			if (part.type === 'reasoning-delta') {
 				if (part.text && part.text.length > 0) {
 					emitted = true;
-					callbacks.onTextDelta(part.text);
+
+					// Store this so we can replay it as reasoning_content on the next request.
+					callbacks.onReasoningDelta?.(part.text);
+
+					// Optional: do not show hidden thinking as normal chat text.
+					// callbacks.onTextDelta(part.text);
 				}
 				continue;
 			}
@@ -225,7 +232,8 @@ function createProvider(
 	apiKey: string,
 	baseURL: string,
 	debugLogging?: boolean,
-	includeUsage?: boolean
+	includeUsage?: boolean,
+	sourceMessages?: ModelMessage[]
 ): (modelId: string) => any {
 	switch (providerNpm) {
 		case '@ai-sdk/anthropic':
@@ -254,9 +262,92 @@ function createProvider(
 				baseURL,
 				fetch: debugLogging ? createDebugFetch() : undefined,
 				includeUsage,
-				transformRequestBody: (args) => applyOpenAICompatibleCaching(args),
+				transformRequestBody: (args) =>
+					injectOpenAICompatibleReasoningContent(
+						applyOpenAICompatibleCaching(args),
+						sourceMessages
+					),
 			});
 	}
+}
+
+
+function injectOpenAICompatibleReasoningContent(
+	args: Record<string, any>,
+	sourceMessages?: ModelMessage[]
+): Record<string, any> {
+	if (!sourceMessages || sourceMessages.length === 0 || !Array.isArray(args.messages)) {
+		return args;
+	}
+
+	const sourceAssistantMessages = sourceMessages.filter((message) => message?.role === 'assistant');
+	if (sourceAssistantMessages.length === 0) {
+		return args;
+	}
+
+	let sourceAssistantIndex = 0;
+	let changed = false;
+
+	const messages = args.messages.map((requestMessage: unknown) => {
+		if (!requestMessage || typeof requestMessage !== 'object') {
+			return requestMessage;
+		}
+
+		const record = requestMessage as Record<string, any>;
+		if (record.role !== 'assistant') {
+			return requestMessage;
+		}
+
+		const sourceMessage = sourceAssistantMessages[sourceAssistantIndex++];
+		const reasoningContent = getReasoningContentFromSourceMessage(sourceMessage);
+		if (!reasoningContent) {
+			return requestMessage;
+		}
+
+		// DeepSeek V4 thinking mode requires this exact field to be replayed on
+		// later requests. The AI SDK's OpenAI-compatible adapter may drop custom
+		// fields from ModelMessage, so we re-inject it at the final HTTP body stage.
+		if (record.reasoning_content === reasoningContent) {
+			return requestMessage;
+		}
+
+		changed = true;
+		return {
+			...record,
+			reasoning_content: reasoningContent,
+		};
+	});
+
+	return changed ? { ...args, messages } : args;
+}
+
+function getReasoningContentFromSourceMessage(message: unknown): string | undefined {
+	if (!message || typeof message !== 'object') {
+		return undefined;
+	}
+
+	const record = message as Record<string, any>;
+	const direct = record.reasoning_content ?? record.reasoningContent;
+	if (typeof direct === 'string' && direct.trim().length > 0) {
+		return direct;
+	}
+
+	// Defensive fallbacks for future/provider-specific shapes.
+	const providerOptions = record.providerOptions ?? record.provider_options;
+	const candidates = [
+		providerOptions?.[OPENAI_COMPAT_PROVIDER_NAME]?.reasoning_content,
+		providerOptions?.openaiCompatible?.reasoning_content,
+		providerOptions?.opencode?.reasoning_content,
+		providerOptions?.['opencode-zen']?.reasoning_content,
+	];
+
+	for (const candidate of candidates) {
+		if (typeof candidate === 'string' && candidate.trim().length > 0) {
+			return candidate;
+		}
+	}
+
+	return undefined;
 }
 
 function applyOpenAICompatibleCaching(args: Record<string, any>): Record<string, any> {
