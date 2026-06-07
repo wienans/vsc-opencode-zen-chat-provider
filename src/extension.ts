@@ -9,6 +9,8 @@ export function activate(context: vscode.ExtensionContext) {
 	const output = getOutputChannel();
 	const provider = new OpenCodeZenChatProvider(context);
 
+
+
 	context.subscriptions.push(
 		output,
 		vscode.commands.registerCommand('opencodeZen.setApiKey', async () => {
