@@ -122,7 +122,7 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 					headers: requestHeaders,
 					toolNameMap: toolNameMap.toVsCode,
 					debugLogging: debugFlag,
-					includeUsage: promptCaching.enabled,
+					includeUsage: true,
 				},
 				{
 					onTextDelta: (delta) => {
@@ -132,6 +132,21 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 					},
 					onToolCall: ({ toolCallId, toolName, input }) => {
 						progress.report(new vscode.LanguageModelToolCallPart(toolCallId, toolName, input));
+					},
+					onUsage: (usage) => {
+						const promptTokens = usage.inputTokens ?? 0;
+						const completionTokens = usage.outputTokens ?? 0;
+						const totalTokens = usage.totalTokens ?? 0;
+						const cachedTokens = usage.inputTokenDetails?.cacheReadTokens ?? 0;
+						const data = new TextEncoder().encode(JSON.stringify({
+							prompt_tokens: Math.max(0, promptTokens),
+							completion_tokens: Math.max(0, completionTokens),
+							total_tokens: Math.max(0, totalTokens),
+							prompt_tokens_details: {
+								cached_tokens: Math.max(0, cachedTokens)
+							}
+						}));
+						progress.report(new vscode.LanguageModelDataPart(data, 'usage'));
 					},
 				}
 			);
