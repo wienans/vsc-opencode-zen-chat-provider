@@ -5,7 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## UNRELEASED [x.x.x] - xxxx-xx-xx
+## [0.1.4] - 2026-06-23
+
+### Added
+
+- Auto-truncate older messages to fit within model context window, preserving tool-call/tool-result pairs.
+- Separate thinking/reasoning tokens from regular response using `LanguageModelThinkingPart` (proposed API).
+- Emit token usage as `LanguageModelDataPart` for context window display.
+- Dev-mode strip/restore script (`scripts/dev-mode.js`) for clean commits.
+
+### Changed
+
+- Improve error messages to include HTTP status, URL, and truncated response body.
+- Add VS Code debug configuration (`launch.json`, `tasks.json`) for extension development.
 
 ## [0.1.3] - 2026-01-27
 
