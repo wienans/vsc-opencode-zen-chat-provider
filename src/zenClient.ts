@@ -12,6 +12,7 @@ export type ToolMode = 'auto' | 'required';
 export type StreamCallbacks = {
 	onTextDelta: (delta: string) => void;
 	onToolCall: (args: { toolCallId: string; toolName: string; input: object }) => void;
+	onUsage?: (usage: { inputTokens?: number; outputTokens?: number; totalTokens?: number; inputTokenDetails?: { cacheReadTokens?: number } }) => void;
 };
 
 type ApiErrorDetails = {
@@ -212,6 +213,18 @@ export async function streamZen(
 			requestBody,
 			url: `${baseURL}${endpointPath}`,
 		});
+	}
+
+	// Emit usage data for context window display (PR #315394 pattern).
+	if (callbacks.onUsage) {
+		try {
+			const usage = await result.usage;
+			if (usage) {
+				callbacks.onUsage(usage);
+			}
+		} catch {
+			// usage may not be available for all providers
+		}
 	}
 
 	// VS Code shows "Sorry, no response was returned" if we emit nothing.
