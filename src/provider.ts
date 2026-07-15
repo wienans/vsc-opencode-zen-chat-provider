@@ -6,7 +6,7 @@ import { ModelRegistry } from './modelRegistry';
 import { OPENAI_COMPAT_PROVIDER_NAME, streamZen } from './zenClient';
 import { getOutputChannel } from './output';
 
-export const VENDOR_ID = 'opencode';
+export const VENDOR_ID = 'opencode-zen';
 
 export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider {
 	private readonly registry: ModelRegistry;
@@ -43,7 +43,8 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 			.then((apiKey) => this.registry.getModels({ hasKey: Boolean(apiKey && apiKey.trim()) }))
 			.catch((err) => {
 			// If model metadata fetch fails, surface no models rather than throwing.
-			console.error(err);
+			const output = getOutputChannel();
+			output.error(`Failed to load models: ${err instanceof Error ? err.message : String(err)}`);
 			return [];
 			});
 	}

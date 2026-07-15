@@ -11,7 +11,8 @@
       "outFiles": [
         "${workspaceFolder}/out/**/*.js"
       ],
-      "preLaunchTask": "TypeScript Compile"
+      "preLaunchTask": "Debug Prepare",
+      "postDebugTask": "Dev Marker: Unmark"
     },
     {
       "name": "Extension Tests",
@@ -24,7 +25,8 @@
       "outFiles": [
         "${workspaceFolder}/out/**/*.js"
       ],
-      "preLaunchTask": "TypeScript Compile"
+      "preLaunchTask": "Debug Prepare",
+      "postDebugTask": "Dev Marker: Unmark"
     }
   ]
 }

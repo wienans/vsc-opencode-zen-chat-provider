@@ -12,7 +12,10 @@
   "engines": {
     "vscode": "^1.104.0"
   },
-  "enabledApiProposals": ["chatProvider", "languageModelThinkingPart"],
+  "enabledApiProposals": [
+    "chatProvider",
+    "languageModelThinkingPart"
+  ],
   "categories": [
     "AI",
     "Chat"
@@ -39,7 +42,7 @@
   "contributes": {
     "languageModelChatProviders": [
       {
-        "vendor": "opencode",
+        "vendor": "opencode-zen",
         "displayName": "OpenCode Zen"
       }
     ],
@@ -77,19 +80,30 @@
         },
         "opencodeZen.promptCaching.retention": {
           "type": "string",
-          "enum": ["in_memory", "24h"],
+          "enum": [
+            "in_memory",
+            "24h"
+          ],
           "default": "in_memory",
           "description": "Retention policy for OpenAI prompt caching. '24h' requires a compatible OpenAI model."
         },
         "opencodeZen.promptCaching.cacheKeyScope": {
           "type": "string",
-          "enum": ["workspace", "global", "none"],
+          "enum": [
+            "workspace",
+            "global",
+            "none"
+          ],
           "default": "workspace",
           "description": "Scope for the prompt cache key used by OpenAI/OpenAI-compatible providers."
         },
         "opencodeZen.promptCaching.anthropicTtl": {
           "type": "string",
-          "enum": ["5m", "1h", "none"],
+          "enum": [
+            "5m",
+            "1h",
+            "none"
+          ],
           "default": "5m",
           "description": "Anthropic cache_control TTL for cached message blocks. 'none' omits TTL."
         }

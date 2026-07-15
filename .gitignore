@@ -2,4 +2,3 @@ node_modules
 out
 *.vsix
 .githooks
-.dev-cache/
