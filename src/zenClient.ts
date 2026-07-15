@@ -42,7 +42,25 @@ function wrapApiError(err: unknown, extra?: Partial<ApiErrorDetails>): Error {
 		return Object.assign(wrapped, details);
 	}
 
-	const wrapped = new Error(baseMessage, { cause: err instanceof Error ? err : undefined });
+	// Build a diagnostic message that includes status/URL/response so the user
+	// can actually see what went wrong (VS Code only shows error.message).
+	const parts: string[] = [baseMessage];
+	if (details.statusCode !== undefined) {
+		parts.unshift(`HTTP ${details.statusCode}`);
+	}
+	if (details.url) {
+		parts.push(`URL: ${details.url}`);
+	}
+	if (details.responseBody) {
+		// Truncate very long bodies to keep the message readable.
+		const body = details.responseBody.length > 500
+			? details.responseBody.slice(0, 500) + '…'
+			: details.responseBody;
+		parts.push(`Response: ${body}`);
+	}
+	const message = parts.join(' — ');
+
+	const wrapped = new Error(message, { cause: err instanceof Error ? err : undefined });
 	return Object.assign(wrapped, details);
 }
 
