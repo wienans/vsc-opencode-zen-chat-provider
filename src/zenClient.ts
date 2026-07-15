@@ -11,6 +11,7 @@ export type ToolMode = 'auto' | 'required';
 
 export type StreamCallbacks = {
 	onTextDelta: (delta: string) => void;
+	onThinkingDelta: (delta: string) => void;
 	onToolCall: (args: { toolCallId: string; toolName: string; input: object }) => void;
 };
 
@@ -178,12 +179,14 @@ export async function streamZen(
 				continue;
 			}
 
-			// Some providers emit reasoning tokens separately. VS Code doesn't have a reasoning response part,
-			// so we surface it as normal text.
+			// Some providers emit reasoning tokens separately. Route them to the
+			// thinking callback so VS Code surfaces them as thinking content.
+			// Inspired by highvoltz's proof-of-concept (issue #8):
+			// https://github.com/highvoltz/vsc-opencode-zen-chat-provider/commit/33410a4
 			if (part.type === 'reasoning-delta') {
 				if (part.text && part.text.length > 0) {
 					emitted = true;
-					callbacks.onTextDelta(part.text);
+					callbacks.onThinkingDelta(part.text);
 				}
 				continue;
 			}

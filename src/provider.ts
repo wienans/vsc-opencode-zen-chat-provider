@@ -52,7 +52,7 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 		model: vscode.LanguageModelChatInformation,
 		messages: readonly vscode.LanguageModelChatRequestMessage[],
 		options: vscode.ProvideLanguageModelChatResponseOptions,
-		progress: vscode.Progress<vscode.LanguageModelResponsePart>,
+		progress: vscode.Progress<vscode.LanguageModelResponsePart2>,
 		token: vscode.CancellationToken
 	): Promise<void> {
 		const storedApiKey = await getApiKey(this.context.secrets);
@@ -128,6 +128,11 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 					onTextDelta: (delta) => {
 						if (delta) {
 							progress.report(new vscode.LanguageModelTextPart(delta));
+						}
+					},
+					onThinkingDelta: (delta) => {
+						if (delta) {
+							progress.report(new vscode.LanguageModelThinkingPart(delta));
 						}
 					},
 					onToolCall: ({ toolCallId, toolName, input }) => {
