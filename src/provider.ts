@@ -62,7 +62,9 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 		token.onCancellationRequested(() => abortController.abort());
 
 		const toolMode = options.toolMode === vscode.LanguageModelChatToolMode.Required ? 'required' : 'auto';
-		const requestToolMode = model.id.endsWith('-go') && toolMode === 'required' ? 'auto' : toolMode;
+		// Free (-free) models and reasoning (-go) models don't support forced tool calling (tool_choice: "required")
+		// through the OpenCode "Console" upstream provider. Fall back to 'auto' for these.
+		const requestToolMode = (model.id.endsWith('-go') || model.id.endsWith('-free')) && toolMode === 'required' ? 'auto' : toolMode;
 		const providerInfo = await this.registry.getModelProviderInfo(model.id);
 		const requestModelId = providerInfo?.originalModelId ?? model.id;
 		const requestMeta = await getOrCreateRequestMetadata(this.context, options);
