@@ -8,6 +8,12 @@ import { getOutputChannel } from './output';
 
 export const VENDOR_ID = 'opencode';
 
+export function normalizeRequestToolMode(modelId: string, toolMode: 'auto' | 'required'): 'auto' | 'required' {
+	return (modelId.endsWith('-go') || modelId.endsWith('-free') || modelId === 'big-pickle') && toolMode === 'required'
+		? 'auto'
+		: toolMode;
+}
+
 export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider {
 	private readonly registry: ModelRegistry;
 	private readonly onDidChangeEmitter = new vscode.EventEmitter<void>();
@@ -62,7 +68,7 @@ export class OpenCodeZenChatProvider implements vscode.LanguageModelChatProvider
 		token.onCancellationRequested(() => abortController.abort());
 
 		const toolMode = options.toolMode === vscode.LanguageModelChatToolMode.Required ? 'required' : 'auto';
-		const requestToolMode = model.id.endsWith('-go') && toolMode === 'required' ? 'auto' : toolMode;
+		const requestToolMode = normalizeRequestToolMode(model.id, toolMode);
 		const providerInfo = await this.registry.getModelProviderInfo(model.id);
 		const requestModelId = providerInfo?.originalModelId ?? model.id;
 		const requestMeta = await getOrCreateRequestMetadata(this.context, options);
@@ -269,26 +275,37 @@ function simplifyTextOnlyContent(parts: any[]): any {
 	return parts;
 }
 
-function dataPartToAiSdkPart(part: vscode.LanguageModelDataPart): any | undefined {
-	// VS Code may include internal metadata such as cache_control in Agent/Plan mode.
-	if (part.mimeType === 'cache_control') {
+function normalizeMimeType(value: unknown): string | undefined {
+	if (typeof value !== 'string') {
 		return undefined;
 	}
 
-	if (part.mimeType.startsWith('text/')) {
+	const mimeType = value.trim();
+	return mimeType.length > 0 ? mimeType : undefined;
+}
+
+export function dataPartToAiSdkPart(part: vscode.LanguageModelDataPart): any | undefined {
+	const mimeType = normalizeMimeType(part.mimeType);
+
+	// VS Code may include internal metadata such as cache_control in Agent/Plan mode.
+	if (!mimeType || mimeType === 'cache_control') {
+		return undefined;
+	}
+
+	if (mimeType.startsWith('text/')) {
 		return { type: 'text', text: new TextDecoder('utf-8').decode(part.data) };
 	}
 
-	if (part.mimeType.startsWith('image/')) {
+	if (mimeType.startsWith('image/')) {
 		// AI SDK accepts Buffer/Uint8Array.
-		return { type: 'image', image: Buffer.from(part.data), mimeType: part.mimeType };
+		return { type: 'image', image: Buffer.from(part.data), mimeType };
 	}
 
 	// Fallback: represent as a file.
-	return { type: 'file', data: Buffer.from(part.data), mimeType: part.mimeType };
+	return { type: 'file', data: Buffer.from(part.data), mimeType };
 }
 
-function languageModelToolResultContentToOutput(
+export function languageModelToolResultContentToOutput(
 	content: Array<vscode.LanguageModelTextPart | vscode.LanguageModelPromptTsxPart | vscode.LanguageModelDataPart | unknown>
 ): { type: 'text'; value: string } | { type: 'json'; value: unknown } | { type: 'content'; value: Array<any> } {
 	const parts: Array<any> = [];
@@ -307,21 +324,22 @@ function languageModelToolResultContentToOutput(
 			continue;
 		}
 		if (part instanceof vscode.LanguageModelDataPart) {
-			if (part.mimeType === 'cache_control') {
+			const mimeType = normalizeMimeType(part.mimeType);
+			if (!mimeType || mimeType === 'cache_control') {
 				continue;
 			}
-			if (part.mimeType.startsWith('text/')) {
+			if (mimeType.startsWith('text/')) {
 				const text = new TextDecoder('utf-8').decode(part.data);
 				textChunks.push(text);
 				parts.push({ type: 'text', text });
 				continue;
 			}
 			const base64 = Buffer.from(part.data).toString('base64');
-			if (part.mimeType.startsWith('image/')) {
-				parts.push({ type: 'image-data', data: base64, mediaType: part.mimeType });
+			if (mimeType.startsWith('image/')) {
+				parts.push({ type: 'image-data', data: base64, mediaType: mimeType });
 				continue;
 			}
-			parts.push({ type: 'file-data', data: base64, mediaType: part.mimeType });
+			parts.push({ type: 'file-data', data: base64, mediaType: mimeType });
 			continue;
 		}
 

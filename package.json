@@ -99,7 +99,8 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "npm run compile && node scripts/test-provider.mjs"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.15",

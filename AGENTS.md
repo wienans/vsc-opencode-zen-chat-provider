@@ -16,6 +16,9 @@ npm run watch
 # Run ESLint on all TypeScript files
 npm run lint
 
+# Run local provider compatibility regressions
+npm test
+
 ```
 
 ## Additional Context / Projects
@@ -109,6 +112,7 @@ npm run lint
 - Self-test command (`opencodeZen.selfTest`) validates streaming + tool calling
 - Test output written to 'OpenCode Zen' output channel
 - Tests run against live models with configured API key
+- Local compatibility tests cover missing data-part MIME values and tool-mode fallback for Zen free models.
 
 ### Key Patterns
 
